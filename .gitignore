@@ -3,9 +3,8 @@ AGENTS.md
 CLAUDE.md
 .claude/
 
-# Design notes stay local; the README logo is the only file published.
-docs/*
-!docs/logo.webp
+# Design notes stay local.
+docs/
 
 # Dev tooling: generators, importers, smoke tests and their data.
 # release.py stays: the GitHub release workflow runs it.
