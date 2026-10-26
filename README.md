@@ -140,7 +140,7 @@ A replacement for the stock gossip and quest windows, with the NPC's portrait, p
 - **Language flags** to read one quest's title, objectives and description in another language.
 - In a party, how many members share each quest.
 
-![Two-page quest log](screenshots/quest-log-two-page.jpg)
+![Two-page quest log](screenshots/quest-log-two-page.png)
 
 <table>
 <tr>
@@ -157,7 +157,7 @@ A replacement for the stock gossip and quest windows, with the NPC's portrait, p
 
 <table>
 <tr>
-<td width="50%"><img src="screenshots/rewards-gear-advisor.jpg" alt="Gear advisor marks on quest rewards"><br><sub>Best sale value and upgrades</sub></td>
+<td width="50%"><img src="screenshots/rewards-gear-advisor.png" alt="Gear advisor marks on quest rewards"><br><sub>Best sale value and upgrades</sub></td>
 <td width="50%"><img src="screenshots/rewards-experience-reputation.jpg" alt="Experience and reputation rewards"><br><sub>Experience and reputation</sub></td>
 </tr>
 </table>
