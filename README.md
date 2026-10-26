@@ -9,9 +9,10 @@ See every objective. Spend less time searching. Adventure more.
 > [!IMPORTANT]
 > ## Install PandaQuest
 >
-> 1. Copy the `pandaQuest` folder into `Wow-Octo\Interface\AddOns\`.
-> 2. Confirm that `pandaQuest.toc` is directly inside that folder.
-> 3. Launch the game or reload the interface.
+> 1. Download `PandaQuest.zip` from the latest [release](https://github.com/Tom75VN/PandaQuest/releases/latest).
+> 2. Extract the `pandaQuest` folder into `Wow-Octo\Interface\AddOns\`.
+> 3. Confirm that `pandaQuest.toc` is directly inside that folder.
+> 4. Launch the game or reload the interface.
 
 PandaQuest turns questing into exploration instead of guesswork. Its client
 integrations, diagnostics, and compatibility decisions target OctoWoW.

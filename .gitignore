@@ -8,7 +8,13 @@ docs/*
 !docs/logo.webp
 
 # Dev tooling: generators, importers, smoke tests and their data.
-tools/
+# release.py stays: the GitHub release workflow runs it.
+tools/*
+!tools/release.py
+
+# Release packages built locally by tools/release.py.
+/PandaQuest*.zip
+/dist/
 
 # Local Python tooling artifacts.
 __pycache__/
