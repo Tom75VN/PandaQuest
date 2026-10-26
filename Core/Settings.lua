@@ -50,11 +50,12 @@ local SETTINGS_MASCOT_TEXTURE =
 local SETTINGS_MASCOT_SIZE = 185
 local SETTINGS_MASCOT_ALPHA = 0.2
 local SETTINGS_MASCOT_INSET = 8
--- The submenu's three pages, one per section of the page. Under a settings group
+-- The submenu's four pages, one per section of the page. Under a settings group
 -- TAB_ID names the group, and these name the rows inside it.
 local GENERAL_PAGE_ID = TAB_ID .. ".general"
 local DIALOGUE_PAGE_ID = TAB_ID .. ".dialogue"
 local MOBS_PAGE_ID = TAB_ID .. ".mobs"
+local IMPORT_PAGE_ID = TAB_ID .. ".import"
 
 -- The page's own first line: "Panda Quest" in the addon's two-tone wordmark,
 -- with the running version after it. The split is the one the TOC Title already
@@ -223,13 +224,28 @@ local INTERNAL_TAB_HEIGHT = 20
 -- Tab height, its 2px gap, and a 5px margin under the strip so the first
 -- control of either tab does not sit against the row of tabs.
 local INTERNAL_TAB_ADVANCE = 27
-local INTERNAL_TAB_WIDTH = 148
+-- One width per tab, the widest label of the four languages each: four tabs and
+-- their 6px gaps fill the page's text width.
+local INTERNAL_TAB_WIDTHS = { general = 70, dialogue = 130, mobs = 140, import = 70 }
+local INTERNAL_TAB_GAP = 6
+-- A source's button, and the status text that starts beside it.
+local IMPORT_BUTTON_WIDTH = 190
+local IMPORT_TEXT_LEFT = 198
 local MOB_MIN_ROWS_PER_PAGE = 9
--- Rows held back from the height-derived count: the measured host height
--- overstates the drawable area, and without them the pager falls below the
--- visible panel and the page needs scrolling.
-local MOB_RESERVED_ROWS = 2
 local MOB_ROW_HEIGHT = 20
+-- One table, one upvalue: BuildMobSection is near the upvalue limit.
+local MOB_FIT = {
+    -- Vertical text offset inside a result row. The shared -6 drew the text
+    -- ~5px below the stripe's centre on these 20px rows (screenshot,
+    -- 2026-10-26).
+    textDrop = -1,
+    -- pandaUI settles its canvas a tick after the page is shown, so the
+    -- height read while building or opening can be stale. The row count is
+    -- fitted again this long after each refresh. The old fixed two-row
+    -- reserve for that error left about five empty rows under the pager
+    -- instead (screenshot, 2026-10-26).
+    refitDelay = 0.2,
+}
 -- Table rows touch, as Forever's own lists do; the stripe separates them.
 local MOB_ROW_ADVANCE = MOB_ROW_HEIGHT
 -- Space between the last table row and the result counter under it.
@@ -263,13 +279,6 @@ local MOB_TRACKED_TEXT_DROP = 3
 -- drawn on it.
 local MOB_TRACKED_FILL_ALPHA = 0.10
 local MOB_TRACKED_BORDER_ALPHA = 1.00
--- Not a localized string: a cross is a symbol, and this one is drawn as text
--- because the addon ships no cross artwork and this client renders a tinted
--- label on the same styled button every other action here uses.
-local MOB_CLEAR_MARK = "X"
-local MOB_CLEAR_RED = 0.95
-local MOB_CLEAR_GREEN = 0.30
-local MOB_CLEAR_BLUE = 0.30
 local MOB_PAGING_ADVANCE = 26
 -- The pager's own row inside that advance.
 local MOB_PAGER_HEIGHT = 22
@@ -719,6 +728,8 @@ local function NewPage(parent)
         if not button then
             return nil
         end
+        -- pandaUI paints its own hover glow on the buttons it hosts.
+        button.pandaQuestHostHover = Settings.host == "pandaui"
         page.Add(button)
         page.y = page.y - advance
         return button
@@ -857,7 +868,8 @@ local function AvailableHeight(parent)
     if host and type(host.GetIntegratedSettingsPageHeight) == "function" then
         local ok, visible = pcall(host.GetIntegratedSettingsPageHeight)
         if ok and type(visible) == "number" and visible >= CONTENT_HEIGHT then
-            return visible
+            -- Second value: pandaUI's canvas scrolls content past `visible`.
+            return visible, true
         end
     end
     local height = Client.GetObjectHeight(parent)
@@ -867,7 +879,7 @@ local function AvailableHeight(parent)
     return height
 end
 
--- The General section: every stored option, and the pfQuest history action.
+-- The General section: every stored option.
 -- The caller has already put the cursor where the section starts and filed
 -- the widget group its regions go into.
 local function BuildGeneralSection(page)
@@ -1024,51 +1036,7 @@ local function BuildGeneralSection(page)
     page.Checkbox("targetQuestIcon", PQ.L("SETTINGS_TARGET_QUEST_ICON"), nil,
         { width = pairWidth, advance = 0 })
     page.Checkbox("questRewardGearAdvisor", PQ.L("SETTINGS_REWARD_GEAR_ADVISOR"), nil,
-        { left = PAIR_COLUMN_RIGHT, width = rightWidth,
-          advance = CHECKBOX_ADVANCE + 4 })
-
-    -- The import button's label describes its action. The ordinary row gap
-    -- above is enough separation; the old extra 8px is now used by the clearer
-    -- two-line rare-alert description at the top of the page.
-    page.Heading(PQ.L("SETTINGS_HEADING_QUEST_HISTORY"))
-
-    -- This client has no completed-quest API, so a fresh install cannot know
-    -- which quests the character already finished -- see Quest/QuestHistory.lua.
-    -- pfQuest kept that record, and where it is loaded it can be copied in.
-    -- The status line is rewritten on every page open and after every press,
-    -- so the number the player reads is the number the button would act on.
-    -- ONE line reserved, because this one is rewritten at runtime and the
-    -- cursor cannot re-measure it. DescribeShort() is written to fit that, and
-    -- the page is close enough to the bottom of the content box that a
-    -- three-line paragraph here pushed the button off it. The breakdown lives
-    -- in `/pq pfquest`.
-    local importStatus = page.Body(PQ.L("SETTINGS_PFQUEST_CHECKING"), 0, 1)
-
-    local importButton
-
-    local function RefreshImportStatus()
-        local importer = PQ:GetModule("PfQuestImport")
-        if not importer then
-            return
-        end
-        Client.SetSettingsBodyText(importStatus, importer:DescribeShort())
-        Client.SetButtonLabel(importButton, importer:GetButtonLabel())
-    end
-
-    -- One button, three jobs, because from the player's side they are one
-    -- thing: "get my finished quests in". Which of the three it does depends on
-    -- what pfQuest is doing right now, and its label says which -- see
-    -- PfQuestImport:GetButtonLabel and :Press.
-    importButton = page.Button("pfQuestImport", PQ.L("PFQUEST_BUTTON_IMPORT"), function()
-        local importer = PQ:GetModule("PfQuestImport")
-        if not importer then
-            return
-        end
-        importer:Press()
-        RefreshImportStatus()
-    end)
-
-    page.Sync(RefreshImportStatus)
+        { left = PAIR_COLUMN_RIGHT, width = rightWidth, advance = CHECKBOX_ADVANCE })
 end
 
 -- The Quest dialogue section: every option of the immersive dialogue, on a
@@ -1092,6 +1060,87 @@ local function BuildDialogueSection(page)
         { value = "alliance-light", label = PQ.L("SETTINGS_DIALOGUE_THEME_ALLIANCE_LIGHT") },
         { value = "horde-light", label = PQ.L("SETTINGS_DIALOGUE_THEME_HORDE_LIGHT") },
     })
+end
+
+-- The Import section: copies the finished quests of a quest addon the player
+-- used before, with the steps written out above the three buttons.
+--
+-- This client has no completed-quest API, so a fresh install cannot know which
+-- quests the character already finished -- see Quest/QuestHistory.lua. pfQuest,
+-- Questie-Octo and Questline each kept that record, and where one is loaded it
+-- can be copied in (Quest/PfQuestImport.lua).
+--
+-- Each row's status is rewritten on every page open and after every press, so
+-- the number the player reads is the number the button would act on. The status
+-- gets a fixed two-line body because it is rewritten at runtime and the cursor
+-- cannot re-measure it; DescribeShort() is written to fit that, and the
+-- breakdown lives in `/pq pfquest`. Each row's button does whatever the
+-- situation needs, and its label says which -- see PfQuestImport:GetButtonLabel
+-- and :Press.
+local function BuildImportSection(page)
+    page.Heading(PQ.L("SETTINGS_HEADING_QUEST_HISTORY"))
+    page.Body(PQ.L("SETTINGS_IMPORT_INTRO"))
+    page.Body(PQ.L("SETTINGS_IMPORT_STEP_1"))
+    page.Body(PQ.L("SETTINGS_IMPORT_STEP_2"))
+    page.Body(PQ.L("SETTINGS_IMPORT_STEP_3"))
+    page.Body(PQ.L("SETTINGS_IMPORT_STEP_4"))
+    page.Body(PQ.L("SETTINGS_IMPORT_STEP_5"))
+    page.Gap(6)
+
+    local importer = PQ:GetModule("PfQuestImport")
+    local sources = importer and importer:GetSources() or {}
+    local rows = {}
+
+    local function RefreshImportRows()
+        local module = PQ:GetModule("PfQuestImport")
+        if not module then
+            return
+        end
+        local index = 1
+        while index <= table.getn(rows) do
+            local row = rows[index]
+            Client.SetSettingsBodyText(row.status, module:DescribeShort(nil, row.id))
+            Client.SetButtonLabel(row.button, module:GetButtonLabel(row.id))
+            index = index + 1
+        end
+    end
+
+    local function AddSourceRow(def)
+        local row = { id = def.id }
+        row.button = page.Button(def.button, def.name, function()
+            local module = PQ:GetModule("PfQuestImport")
+            if module then
+                module:Press(def.id)
+            end
+            RefreshImportRows()
+        end, IMPORT_BUTTON_WIDTH, { advance = 0 })
+        row.status = page.Body(PQ.L("SETTINGS_PFQUEST_CHECKING"), IMPORT_TEXT_LEFT, 2)
+        page.Gap(6)
+        table.insert(rows, row)
+    end
+
+    local index = 1
+    while index <= table.getn(sources) do
+        AddSourceRow(sources[index])
+        index = index + 1
+    end
+
+    page.Button("importUndo", PQ.L("SETTINGS_IMPORT_UNDO"), function()
+        local module = PQ:GetModule("PfQuestImport")
+        if not module then
+            return
+        end
+        local total = module:Undo()
+        if total > 0 then
+            PQ:Print(PQ.LN("IMPORT_UNDO_DONE", total))
+        else
+            PQ:Print(PQ.L("IMPORT_UNDO_NOTHING"))
+        end
+        RefreshImportRows()
+    end, IMPORT_BUTTON_WIDTH, { advance = 0 })
+    page.Body(PQ.L("SETTINGS_IMPORT_UNDO_NOTE"), IMPORT_TEXT_LEFT, 2)
+
+    page.Sync(RefreshImportRows)
 end
 
 -- The Mob tracking section: the creature search, the tracked-creature band and
@@ -1150,7 +1199,11 @@ local function BuildMobSection(page, MobsShown)
     local trackedLabel = page.Add(Client.CreateSettingsHeading(parent, "",
         MOB_TRACKED_TEXT_INDENT, trackedContentTop - MOB_TRACKED_TEXT_DROP))
     page.y = trackedContentTop
-    local trackedClear = page.Button("mobTrackedClear", MOB_CLEAR_MARK,
+    -- The quest log's red close button (QuestLogRedButton), not a text "X".
+    local trackedClear = page.Add(Client.CreateSettingsCloseButton(parent,
+        WidgetName("mobTrackedClear"),
+        MOB_LIST_WIDTH - MOB_TRACKED_INSET - MOB_CLEAR_SIZE, page.y,
+        MOB_CLEAR_SIZE,
         function()
             local pins = PQ:GetModule("NpcPins")
             local trackedId = pins and pins:GetTrackedMobId()
@@ -1158,46 +1211,50 @@ local function BuildMobSection(page, MobsShown)
                 pins:SetMobTracked(trackedId, false)
                 RefreshMobResults()
             end
-        end, MOB_CLEAR_SIZE,
-        { left = MOB_LIST_WIDTH - MOB_TRACKED_INSET - MOB_CLEAR_SIZE,
-          height = MOB_CLEAR_SIZE,
-          -- Past the cross, past the panel's lower inset, then the gap: the
-          -- cursor has to clear the panel itself, not just the control on it.
-          advance = MOB_CLEAR_SIZE + MOB_TRACKED_INSET + MOB_TRACKED_GAP })
-    Client.SetButtonLabel(trackedClear, MOB_CLEAR_MARK,
-        MOB_CLEAR_RED, MOB_CLEAR_GREEN, MOB_CLEAR_BLUE)
+        end))
+    -- Past the cross, past the panel's lower inset, then the gap: the cursor
+    -- has to clear the panel itself, not just the control on it.
+    page.y = page.y - (MOB_CLEAR_SIZE + MOB_TRACKED_INSET + MOB_TRACKED_GAP)
     -- The cross is a named widget; the line beside it is a FontString, which
     -- has no name on this client. Published so the offline test can read what
     -- the band actually says.
     Settings.mobTrackedLabel = trackedLabel
     Settings.mobTrackedPanel = trackedPanel
 
-    -- pandaUI can hand this builder a panel much taller than the standalone
-    -- 428px content box. Fill whichever host is actually drawing the page,
-    -- leaving only the paging row and a small bottom margin unused.
-    local availableHeight = AvailableHeight(parent)
-    local mobRowsPerPage = math.floor((availableHeight + page.y
-        - MOB_TABLE_GAP - MOB_STATUS_ADVANCE - MOB_PAGING_ADVANCE
-        - MOB_BOTTOM_MARGIN)
-        / MOB_ROW_ADVANCE) - MOB_RESERVED_ROWS
-    if mobRowsPerPage < MOB_MIN_ROWS_PER_PAGE then
-        mobRowsPerPage = MOB_MIN_ROWS_PER_PAGE
-    end
-    Settings.mobRowsPerPage = mobRowsPerPage
-    Settings.pageAvailableHeight = availableHeight
-
     -- The results are a plain table (Client.CreateSettingsListRow): touching
     -- rows, every second one striped, no button chrome per line.
+    --
+    -- pandaUI can hand this builder a panel much taller than the standalone
+    -- 428px content box, and its final height is only known a tick after the
+    -- page is shown. So the row count is not fixed here: FitMobRows reads the
+    -- host height on every refresh, makes rows on demand, and moves the
+    -- counter and pager to sit under the last row in use.
+    local listTop = page.y
+    local mobGroup = page.currentGroup
     local mobRows = {}
-    local rowIndex = 1
-    while rowIndex <= mobRowsPerPage do
-        local capturedIndex = rowIndex
+    local mobRowsPerPage = 0
+    local resultStatus, pager
+
+    local function FittedRowCount()
+        local availableHeight = AvailableHeight(parent)
+        Settings.pageAvailableHeight = availableHeight
+        local count = math.floor((availableHeight + listTop
+            - MOB_TABLE_GAP - MOB_STATUS_ADVANCE - MOB_PAGING_ADVANCE
+            - MOB_BOTTOM_MARGIN) / MOB_ROW_ADVANCE)
+        if count < MOB_MIN_ROWS_PER_PAGE then
+            count = MOB_MIN_ROWS_PER_PAGE
+        end
+        return count
+    end
+
+    local function MakeRow(rowIndex)
         local line = Client.CreateSettingsListRow(parent,
-            WidgetName("mobResult" .. tostring(rowIndex)), 0, page.y,
+            WidgetName("mobResult" .. tostring(rowIndex)), 0,
+            listTop - (rowIndex - 1) * MOB_ROW_ADVANCE,
             MOB_LIST_WIDTH, MOB_ROW_HEIGHT,
             rowIndex - math.floor(rowIndex / 2) * 2 == 0,
             function()
-                local row = mobRows[capturedIndex]
+                local row = mobRows[rowIndex]
                 local record = row and row.record
                 local pins = PQ:GetModule("NpcPins")
                 if record and pins then
@@ -1205,22 +1262,49 @@ local function BuildMobSection(page, MobsShown)
                         not pins:IsMobTracked(record.unitId))
                     RefreshMobResults()
                 end
-            end)
+            end, MOB_FIT.textDrop)
+        -- A row made after the build still belongs to this section's group,
+        -- so the standalone tab strip hides it with the rest.
+        local saved = page.currentGroup
+        page.currentGroup = mobGroup
         page.Add(line)
-        page.y = page.y - MOB_ROW_ADVANCE
+        page.currentGroup = saved
         mobRows[rowIndex] = { button = line, record = nil }
-        rowIndex = rowIndex + 1
     end
+
+    -- Returns the page.y just below the pager.
+    local function FitMobRows()
+        local count = FittedRowCount()
+        local made = table.getn(mobRows)
+        while made < count do
+            made = made + 1
+            MakeRow(made)
+        end
+        mobRowsPerPage = count
+        Settings.mobRowsPerPage = count
+        local y = listTop - count * MOB_ROW_ADVANCE - MOB_TABLE_GAP
+        if resultStatus then
+            Client.AnchorObject(resultStatus, "TOPLEFT", parent, "TOPLEFT", 0, y)
+        end
+        y = y - MOB_STATUS_ADVANCE
+        if pager and pager.frame then
+            Client.AnchorObject(pager.frame, "TOPLEFT", parent, "TOPLEFT", 0, y)
+        end
+        return y - MOB_PAGING_ADVANCE
+    end
+
+    FitMobRows()
+    page.y = listTop - mobRowsPerPage * MOB_ROW_ADVANCE
     page.Gap(MOB_TABLE_GAP)
 
     -- The result/page counter sits directly above the paging row it describes,
     -- under the results it counts. One reserved line, because its text is
     -- rewritten at runtime and everything below was placed from this height.
-    local resultStatus = page.Body(PQ.L("SETTINGS_MOB_READY"), 0, 1)
+    resultStatus = page.Body(PQ.L("SETTINGS_MOB_READY"), 0, 1)
 
     -- Pagination centred under the table: previous arrow, "page / pages",
     -- next arrow (Client.CreateSettingsPager).
-    local pager = page.Add(Client.CreateSettingsPager(parent,
+    pager = page.Add(Client.CreateSettingsPager(parent,
         WidgetName("mobPager"), 0, page.y, MOB_LIST_WIDTH, MOB_PAGER_HEIGHT,
         function()
             if Settings.mobSearchPage > 1 then
@@ -1233,6 +1317,26 @@ local function BuildMobSection(page, MobsShown)
             RefreshMobResults()
         end))
     page.y = page.y - MOB_PAGING_ADVANCE
+
+    -- One delayed re-fit after a refresh, for pandaUI's late canvas layout.
+    -- It runs once and unschedules itself; it refreshes only when the page is
+    -- still on screen and the fitted count actually changed.
+    local function ScheduleRefit()
+        local driver = PQ:GetModule("Driver")
+        if not driver then
+            return
+        end
+        driver:Schedule("settings.mobfit", MOB_FIT.refitDelay, function()
+            local running = PQ:GetModule("Driver")
+            if running then
+                running:Unschedule("settings.mobfit")
+            end
+            if MobsShown() and Client.IsObjectVisible(mobSearchInput)
+                and FittedRowCount() ~= mobRowsPerPage then
+                RefreshMobResults()
+            end
+        end)
+    end
 
     -- A creature's name as both surfaces say it: the name, then its level range
     -- when the data has one. `units[id].lvl` is a STRING here and may be a
@@ -1274,6 +1378,10 @@ local function BuildMobSection(page, MobsShown)
     end
 
     RefreshMobResults = function()
+        FitMobRows()
+        if MobsShown() then
+            ScheduleRefit()
+        end
         local database = PQ:GetModule("Database")
         local pins = PQ:GetModule("NpcPins")
         local matches = database and database:SearchMobsByName(
@@ -1322,9 +1430,12 @@ local function BuildMobSection(page, MobsShown)
 
         local first = (Settings.mobSearchPage - 1) * mobRowsPerPage + 1
         local index = 1
-        while index <= mobRowsPerPage do
+        local made = table.getn(mobRows)
+        while index <= made do
             local row = mobRows[index]
-            local record = matches[first + index - 1]
+            -- Rows past the fitted count stay hidden: the host got shorter.
+            local record = index <= mobRowsPerPage
+                and matches[first + index - 1] or nil
             row.record = record
             if record then
                 local tracked = pins and pins:IsMobTracked(record.unitId)
@@ -1350,13 +1461,14 @@ end
 
 -- `section` nil builds the whole page, every section under the internal tab
 -- strip: the standalone window, and an pandaUI without settings groups.
--- "general", "dialogue" or "mobs" builds that section alone with no strip, for a page of
+-- "general", "dialogue", "mobs" or "import" builds that section alone with no strip, for a page of
 -- pandaUI's submenu, where the sidebar rows are the tabs.
 function Settings:BuildPage(parent, section)
     if not parent then
         return {}, nil
     end
-    if section ~= "general" and section ~= "dialogue" and section ~= "mobs" then
+    if section ~= "general" and section ~= "dialogue" and section ~= "mobs"
+        and section ~= "import" then
         section = nil
     end
 
@@ -1374,7 +1486,8 @@ function Settings:BuildPage(parent, section)
     local generalWidgets = {}
     local dialogueWidgets = {}
     local mobWidgets = {}
-    local generalTab, dialogueTab, mobTab
+    local importWidgets = {}
+    local generalTab, dialogueTab, mobTab, importTab
     local RefreshMobResults, mobSearchInput
 
     -- The page draws no wordmark heading of its own: both hosts already title
@@ -1403,34 +1516,37 @@ function Settings:BuildPage(parent, section)
     end
 
     local function ApplyInternalTab(tab)
-        if tab ~= "mobs" and tab ~= "dialogue" then
+        if tab ~= "mobs" and tab ~= "dialogue" and tab ~= "import" then
             tab = "general"
         end
         Settings.activePageTab = tab
         ShowGroup(generalWidgets, tab == "general")
         ShowGroup(dialogueWidgets, tab == "dialogue")
         ShowGroup(mobWidgets, tab == "mobs")
+        ShowGroup(importWidgets, tab == "import")
         Client.SetSettingsTabSelected(generalTab, tab == "general")
         Client.SetSettingsTabSelected(dialogueTab, tab == "dialogue")
         Client.SetSettingsTabSelected(mobTab, tab == "mobs")
+        Client.SetSettingsTabSelected(importTab, tab == "import")
         if tab == "mobs" and type(RefreshMobResults) == "function" then
             RefreshMobResults()
         end
     end
 
     if not section then
-        generalTab = page.Add(Client.CreateSettingsTab(parent,
-            WidgetName("generalTab"), PQ.L("SETTINGS_TAB_GENERAL"),
-            0, page.y, INTERNAL_TAB_WIDTH, INTERNAL_TAB_HEIGHT,
-            function() ApplyInternalTab("general") end))
-        dialogueTab = page.Add(Client.CreateSettingsTab(parent,
-            WidgetName("dialogueTab"), PQ.L("SETTINGS_TAB_DIALOGUE"),
-            INTERNAL_TAB_WIDTH + 6, page.y, INTERNAL_TAB_WIDTH,
-            INTERNAL_TAB_HEIGHT, function() ApplyInternalTab("dialogue") end))
-        mobTab = page.Add(Client.CreateSettingsTab(parent,
-            WidgetName("mobTrackingTab"), PQ.L("SETTINGS_TAB_MOB_TRACKING"),
-            (INTERNAL_TAB_WIDTH + 6) * 2, page.y, INTERNAL_TAB_WIDTH,
-            INTERNAL_TAB_HEIGHT, function() ApplyInternalTab("mobs") end))
+        local tabLeft = 0
+        local function AddInternalTab(key, name, label)
+            local width = INTERNAL_TAB_WIDTHS[key]
+            local tab = page.Add(Client.CreateSettingsTab(parent, WidgetName(name),
+                PQ.L(label), tabLeft, page.y, width, INTERNAL_TAB_HEIGHT,
+                function() ApplyInternalTab(key) end))
+            tabLeft = tabLeft + width + INTERNAL_TAB_GAP
+            return tab
+        end
+        generalTab = AddInternalTab("general", "generalTab", "SETTINGS_TAB_GENERAL")
+        dialogueTab = AddInternalTab("dialogue", "dialogueTab", "SETTINGS_TAB_DIALOGUE")
+        mobTab = AddInternalTab("mobs", "mobTrackingTab", "SETTINGS_TAB_MOB_TRACKING")
+        importTab = AddInternalTab("import", "importTab", "SETTINGS_TAB_IMPORT")
         page.y = page.y - INTERNAL_TAB_ADVANCE
     end
     local contentTop = page.y
@@ -1457,11 +1573,19 @@ function Settings:BuildPage(parent, section)
         RefreshMobResults, mobSearchInput = BuildMobSection(page, MobsShown)
         mobHeight = -page.y
     end
+
+    local importHeight = 0
+    if not section or section == "import" then
+        page.Group(importWidgets)
+        page.y = contentTop
+        BuildImportSection(page)
+        importHeight = -page.y
+    end
     page.Group(nil)
 
     -- Each open also records which section the player is on, so /pq config
     -- returns to it under either host.
-    if section == "general" or section == "dialogue" then
+    if section == "general" or section == "dialogue" or section == "import" then
         page.Sync(function()
             Settings.activePageTab = section
         end)
@@ -1478,10 +1602,9 @@ function Settings:BuildPage(parent, section)
         end)
     end
 
-    -- Neither host scrolls this page, so compare its largest section against
-    -- the actual host height. The standalone fallback remains 428px; pandaUI
-    -- can provide substantially more room and the mob rows consume it.
-    local availableHeight = AvailableHeight(parent)
+    -- Only the standalone host is a fixed, non-scrolling box; pandaUI's
+    -- canvas shows a scroll bar, so an overflow there is not cut off.
+    local availableHeight, hostScrolls = AvailableHeight(parent)
     self.pageHeight = generalHeight
     if dialogueHeight > self.pageHeight then
         self.pageHeight = dialogueHeight
@@ -1489,7 +1612,10 @@ function Settings:BuildPage(parent, section)
     if mobHeight > self.pageHeight then
         self.pageHeight = mobHeight
     end
-    if self.pageHeight > availableHeight then
+    if importHeight > self.pageHeight then
+        self.pageHeight = importHeight
+    end
+    if not hostScrolls and self.pageHeight > availableHeight then
         PQ:Warn(PQ.L("SETTINGS_WARN_PAGE_TOO_TALL",
             math.floor(self.pageHeight), math.floor(availableHeight)))
     end
@@ -1526,7 +1652,7 @@ end
 
 -- Once. Where pandaUI has settings groups, PandaQuest is an "PandaQuest"
 -- submenu in its sidebar with one page per section (General, Quest dialogue,
--- Mob tracking) --
+-- Mob tracking, Import) --
 -- the sidebar rows replace the internal tab strip. An pandaUI without
 -- RegisterSettingsGroup gets the whole tabbed page as a single row instead.
 -- The guard means a re-entered resolution cannot file a duplicate id and get
@@ -1578,8 +1704,13 @@ function Settings:RegisterWithPandaUI(host)
             function(content)
                 return Settings:BuildPage(content, "mobs")
             end, { parent = TAB_ID, after = DIALOGUE_PAGE_ID })
+        local okImport, importPage = pcall(host.RegisterSettingsTab, IMPORT_PAGE_ID,
+            PQ.L("SETTINGS_TAB_IMPORT"),
+            function(content)
+                return Settings:BuildPage(content, "import")
+            end, { parent = TAB_ID, after = MOBS_PAGE_ID })
         if not okGeneral or not general or not okDialogue or not dialogue
-            or not okMobs or not mobs then
+            or not okMobs or not mobs or not okImport or not importPage then
             return false
         end
         self.registered = true
@@ -1623,8 +1754,8 @@ function Settings:ResolveHost(force)
                 "pandaUI was found at runtime and accepted PandaQuest's options page "
                 .. (self.hostLayout == "group"
                     and ("as a submenu (U.RegisterSettingsGroup '" .. TAB_ID .. "', pages '"
-                        .. GENERAL_PAGE_ID .. "', '" .. DIALOGUE_PAGE_ID .. "' and '"
-                        .. MOBS_PAGE_ID .. "')")
+                        .. GENERAL_PAGE_ID .. "', '" .. DIALOGUE_PAGE_ID .. "', '"
+                        .. MOBS_PAGE_ID .. "' and '" .. IMPORT_PAGE_ID .. "')")
                     or ("(U.RegisterSettingsTab, id '" .. TAB_ID .. "')"))
                 .. ". The page is drawn inside "
                 .. "pandaUI's settings window; /pq config opens it there. Detected by type-checking "
@@ -2003,6 +2134,8 @@ function Settings:Open()
                     pageId = MOBS_PAGE_ID
                 elseif self.activePageTab == "dialogue" then
                     pageId = DIALOGUE_PAGE_ID
+                elseif self.activePageTab == "import" then
+                    pageId = IMPORT_PAGE_ID
                 end
             end
             local ok, opened = pcall(pandaUI.OpenSettingsPage, pageId)

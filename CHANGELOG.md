@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## 0.5.3
+
+- Settings: new Import page with a step-by-step guide. It copies your finished quests from pfQuest, Questie-Octo or Questline, so "!" marks stop coming back for quests you already did. A switched-off addon is borrowed for one reload, then switched back off. One Undo button takes back every import. The pfQuest button moved here from General.
 - Settings: with pandaUI, PandaQuest pages now use the game's settings text size instead of a shrunk page.
 - Settings: PandaQuest pages now use the PandaQuest mascot watermark.
 - Performance: fewer short freezes while idle; the quest log's row highlights no longer create garbage every 0.3 s.

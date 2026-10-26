@@ -75,27 +75,67 @@ The history is PER CHARACTER on both sides, and now genuinely so: the quest
 completion record moved to `## SavedVariablesPerCharacter` (Core/Config.lua's
 CHARACTER_SECTIONS) so importing one character's pfQuest history cannot mark
 quests done for an alt that never did them.
+
+OTHER SOURCES. The same flow serves Questie-Octo and Questline (SOURCES below):
+the same per-character saved-variable rule, the same borrow-for-one-reload, the
+same IMPORTED provenance. One import waits for its reload at a time. The page
+that drives all three is the Import section of Core/Settings.lua.
 ]]
 
 local PQ = PandaQuest
 local Client = PQ.Client
 local PfQuestImport = PQ:NewModule("PfQuestImport")
 
--- pfQuest, pfQuest-tbc and pfQuest-wotlk all declare this same global, so one
--- name covers every variant the player might have installed.
-local SOURCE_GLOBAL = "pfQuest_history"
-
--- The addon folders that declare it, most likely first. Only one of them is
--- ever installed in practice; the list exists so a player running the TBC or
--- WotLK build is not told pfQuest is missing.
-local ADDON_NAMES = { "pfQuest", "pfQuest-tbc", "pfQuest-wotlk" }
-
-local CAPABILITY = "pfQuestHistoryImport"
+-- Every addon a history can be copied from. Each keeps the finished quests in a
+-- saved variable of its own, and only while that addon is enabled (see the
+-- disabled case above):
+--   pfQuest       pfQuest_history[questId or title] = { time, level }
+--   Questie-Octo  QuestieOctoDB.completed[questId] = true
+--   Questline     QuestlineSettings.completedQuests[questId] = true
+-- All three are per character. Shapes read from each addon's own source;
+-- record: compat quests.history_import_source_formats.
+--
+-- `legacy` marks pfQuest, whose chat and page text predates the others and
+-- keeps its PFQUEST_* strings. The other sources share the IMPORT_* strings,
+-- whose first argument is the addon name (see Text below).
+--
+-- pfQuest, pfQuest-tbc and pfQuest-wotlk all declare the same global, so one
+-- entry covers every variant the player might have installed. The addon folders
+-- are listed most likely first; only one of each is installed in practice.
+local SOURCES = {
+    {
+        id = "pfquest",
+        button = "pfQuestImport",
+        name = "pfQuest",
+        legacy = true,
+        addons = { "pfQuest", "pfQuest-tbc", "pfQuest-wotlk" },
+        global = "pfQuest_history",
+        capability = "pfQuestHistoryImport",
+    },
+    {
+        id = "questie",
+        button = "questieImport",
+        name = "Questie-Octo",
+        addons = { "Questie-Octo", "QuestieOcto" },
+        global = "QuestieOctoDB",
+        field = "completed",
+        capability = "questieHistoryImport",
+    },
+    {
+        id = "questline",
+        button = "questlineImport",
+        name = "Questline",
+        addons = { "Questline" },
+        global = "QuestlineSettings",
+        field = "completedQuests",
+        capability = "questlineHistoryImport",
+    },
+}
 
 -- Per-character scalars carrying an auto-enable across the reload it needs.
 -- PENDING_KEY holds the addon folder that was switched on, which is also the
 -- "an import is waiting for this reload" flag; RESTORE_KEY records whether it
--- has to be switched off again afterwards.
+-- has to be switched off again afterwards. One import waits at a time.
 local PENDING_KEY = "pfQuestAutoImport"
 local RESTORE_KEY = "pfQuestAutoImportDisable"
 
@@ -119,6 +159,55 @@ local function History()
     return PQ:GetModule("QuestHistory")
 end
 
+-- The source named by `sourceId`; pfQuest when it is nil or unknown, which is
+-- what every caller written before the other sources existed means.
+local function DefOf(sourceId)
+    local index = 1
+    local total = table.getn(SOURCES)
+    while index <= total do
+        if SOURCES[index].id == sourceId then
+            return SOURCES[index]
+        end
+        index = index + 1
+    end
+    return SOURCES[1]
+end
+
+-- The source whose addon folder is `addon`, or nil.
+local function DefOfAddon(addon)
+    local index = 1
+    local total = table.getn(SOURCES)
+    while index <= total do
+        local names = SOURCES[index].addons
+        local at = 1
+        while at <= table.getn(names) do
+            if names[at] == addon then
+                return SOURCES[index]
+            end
+            at = at + 1
+        end
+        index = index + 1
+    end
+    return nil
+end
+
+-- One player-facing string for `def`. pfQuest keeps its own PFQUEST_* text; the
+-- other sources use the IMPORT_* twin of the same suffix, whose first argument
+-- is the addon name. Counted strings go through TextN, count first.
+local function Text(def, suffix, a, b, c)
+    if def.legacy then
+        return PQ.L("PFQUEST_" .. suffix, a, b, c)
+    end
+    return PQ.L("IMPORT_" .. suffix, def.name, a, b, c)
+end
+
+local function TextN(def, suffix, count, a)
+    if def.legacy then
+        return PQ.LN("PFQUEST_" .. suffix, count, a)
+    end
+    return PQ.LN("IMPORT_" .. suffix, count, def.name, a)
+end
+
 -- Both map layers cache the "done" set in their view signature, so an import
 -- that changes it has to say so or the map keeps drawing the "!" markers it
 -- already decided on.
@@ -133,16 +222,37 @@ local function MarkMapDirty()
     end
 end
 
--- Reads the source table, or nil. Re-read on every scan rather than cached at
--- load: nothing establishes the order in which this client loads two addons'
--- saved variables, so a global that was absent when PandaQuest started may be
--- present by the time the player opens the options page.
-function PfQuestImport:GetSource()
-    return Client.GetSavedVariableTable(SOURCE_GLOBAL)
+function PfQuestImport:GetSources()
+    return SOURCES
 end
 
--- Turns one pfQuest history entry into a quest ID this addon's data knows, or
--- nil plus the reason it could not.
+function PfQuestImport:GetSourceName(sourceId)
+    return DefOf(sourceId).name
+end
+
+-- Reads the source's table of finished quests, or nil. Re-read on every scan
+-- rather than cached at load: nothing establishes the order in which this
+-- client loads two addons' saved variables, so a global that was absent when
+-- PandaQuest started may be present by the time the player opens the options
+-- page.
+--
+-- A loaded addon whose table has no list yet (a fresh character) is an empty
+-- history, not an absent one: the global exists, so the addon did load.
+function PfQuestImport:GetSource(sourceId)
+    local def = DefOf(sourceId)
+    local root = Client.GetSavedVariableTable(def.global)
+    if not root or not def.field then
+        return root
+    end
+    local list = root[def.field]
+    if type(list) == "table" then
+        return list
+    end
+    return {}
+end
+
+-- Turns one history entry into a quest ID this addon's data knows, or nil plus
+-- the reason it could not.
 --
 -- Reasons are the vocabulary the report is built from:
 --   "unknown"    a numeric ID the bundled Vanilla data does not carry
@@ -184,9 +294,10 @@ local function ResolveEntry(key)
     return candidates[1], nil
 end
 
--- pfQuest writes { time, level } for a completed quest. Anything else is read
--- conservatively: a `true` value is the pre-migration shape and still means
--- done, but a `false` or a nil is not a completion and is not imported.
+-- pfQuest writes { time, level } for a completed quest; Questie-Octo and
+-- Questline write `true`. Anything else is read conservatively: a `true` value
+-- still means done, but a `false` or a nil is not a completion and is not
+-- imported.
 local function IsCompletion(value)
     if value == true then
         return true
@@ -197,15 +308,16 @@ local function IsCompletion(value)
     return false
 end
 
--- Which pfQuest variant is installed, and what state it is in. Returns nil
--- when none of them is in the addon registry at all -- which is a different
+-- Which variant of the source is installed, and what state it is in. Returns
+-- nil when none of them is in the addon registry at all -- which is a different
 -- answer from "installed but off", and the two lead to completely different
 -- player-facing text.
-function PfQuestImport:FindAddOn()
+function PfQuestImport:FindAddOn(sourceId)
+    local names = DefOf(sourceId).addons
     local index = 1
-    local total = table.getn(ADDON_NAMES)
+    local total = table.getn(names)
     while index <= total do
-        local name = ADDON_NAMES[index]
+        local name = names[index]
         if Client.IsAddOnInstalled(name) then
             return name, Client.IsAddOnEnabled(name), Client.IsAddOnLoaded(name)
         end
@@ -219,7 +331,7 @@ end
 --
 -- `state` is the single word the callers switch on:
 --   "ready"        the history is in memory; an import can run right now
---   "pending"      pfQuest was switched on and the reload has not happened yet
+--   "pending"      this addon was switched on and the reload has not happened yet
 --   "disabled"     installed but off; pressing the button starts the flow
 --   "unavailable"  enabled but its files have not run yet, so a reload is all
 --                  that is missing
@@ -227,13 +339,19 @@ end
 --                  character -- a reload would change nothing, so the button
 --                  must not offer one
 --   "missing"      not installed at all; nothing to import from, ever
-function PfQuestImport:GetState()
+--
+-- `busy` is set when ANOTHER source is waiting for its reload: the pending flag
+-- holds one addon at a time, so a second import has to wait for the first.
+function PfQuestImport:GetState(sourceId)
+    local def = DefOf(sourceId)
     local status = {
-        source = self:GetSource(),
+        source = self:GetSource(def.id),
+        sourceId = def.id,
         addon = nil,
         enabled = nil,
         loaded = nil,
         pending = nil,
+        busy = nil,
         state = "missing",
     }
 
@@ -241,11 +359,18 @@ function PfQuestImport:GetState()
     if config then
         local pending = config:GetCharacter(PENDING_KEY)
         if type(pending) == "string" and pending ~= "" then
-            status.pending = pending
+            -- An addon folder no source names is read as pfQuest's, the only
+            -- source there was when the flag was introduced (see OnEnable).
+            local owner = DefOfAddon(pending) or SOURCES[1]
+            if owner ~= def then
+                status.busy = pending
+            else
+                status.pending = pending
+            end
         end
     end
 
-    status.addon, status.enabled, status.loaded = self:FindAddOn()
+    status.addon, status.enabled, status.loaded = self:FindAddOn(def.id)
 
     if status.source then
         status.state = "ready"
@@ -263,18 +388,20 @@ function PfQuestImport:GetState()
     return status
 end
 
--- Switches pfQuest on for one reload and remembers to switch it back off.
+-- Switches the source's addon on for one reload and remembers to switch it back
+-- off.
 --
 -- Returns the word the caller reports: "ready" (nothing to do, the data is
 -- already here), "asked" (flipped; the player now has to type /reload),
--- "pending" (already flipped by an earlier press), "refused" (the client would
--- not take the change), or "missing".
+-- "pending" (already flipped by an earlier press), "busy" (another source is
+-- waiting for its reload), "refused" (the client would not take the change), or
+-- "missing".
 --
 -- The state to restore is written BEFORE the flag is flipped. If anything goes
 -- wrong between the two, the worst case is a restore that finds nothing to do
--- -- never a pfQuest left enabled with no record that this addon enabled it.
-function PfQuestImport:BeginAutoEnable()
-    local status = self:GetState()
+-- -- never an addon left enabled with no record that this addon enabled it.
+function PfQuestImport:BeginAutoEnable(sourceId)
+    local status = self:GetState(sourceId)
     if status.state == "ready" then
         return "ready", status
     end
@@ -288,6 +415,9 @@ function PfQuestImport:BeginAutoEnable()
     -- load that is not already here, so do not ask for one.
     if status.state == "empty" then
         return "empty", status
+    end
+    if status.busy then
+        return "busy", status
     end
 
     local config = Config()
@@ -311,7 +441,7 @@ function PfQuestImport:BeginAutoEnable()
     return "asked", status
 end
 
--- Puts pfQuest back exactly as it was found and clears the flags. Called on
+-- Puts the addon back exactly as it was found and clears the flags. Called on
 -- every exit from the resumed flow -- success, empty history, or timeout --
 -- because the one outcome that must never happen is the player being left with
 -- an addon this code switched on and forgot about.
@@ -335,10 +465,12 @@ end
 -- and `/pq pfquest` report, so the count the player is shown and the count the
 -- button acts on come from the same pass over the same data.
 --
--- Returns a table; `found` is false when pfQuest's global is not loaded at all,
--- and every count is zero in that case.
-function PfQuestImport:Scan()
+-- Returns a table; `found` is false when the source's global is not loaded at
+-- all, and every count is zero in that case.
+function PfQuestImport:Scan(sourceId)
+    local def = DefOf(sourceId)
     local report = {
+        source = def.id,
         found = false,
         entries = 0,
         importable = 0,
@@ -350,7 +482,7 @@ function PfQuestImport:Scan()
         ids = {},
     }
 
-    local source = self:GetSource()
+    local source = self:GetSource(def.id)
     if not source then
         self:DeclareState(report)
         return report
@@ -362,7 +494,13 @@ function PfQuestImport:Scan()
     for key, value in pairs(source) do
         if IsCompletion(value) then
             report.entries = report.entries + 1
-            local questId, reason = ResolveEntry(key)
+            -- Only pfQuest ever keys a completion by title; for the others a
+            -- numeric string is an ID that went through a text round trip.
+            local entryKey = key
+            if not def.legacy and type(key) == "string" then
+                entryKey = tonumber(key) or key
+            end
+            local questId, reason = ResolveEntry(entryKey)
             if questId then
                 if history and history:IsDone(questId) then
                     report.alreadyDone = report.alreadyDone + 1
@@ -390,8 +528,8 @@ end
 -- an `imported` count added. Re-scans rather than taking a caller's report: the
 -- player may have opened the page minutes ago, and marking a quest done twice
 -- is harmless but reporting a stale number is not.
-function PfQuestImport:Import()
-    local report = self:Scan()
+function PfQuestImport:Import(sourceId)
+    local report = self:Scan(sourceId)
     report.imported = 0
 
     local history = History()
@@ -414,7 +552,8 @@ function PfQuestImport:Import()
     return report
 end
 
--- Takes back every quest a previous import brought in. Completions this addon
+-- Takes back every quest a previous import brought in, from every source: they
+-- share one provenance section (Quest/QuestHistory.lua). Completions this addon
 -- established on its own, and quests the player marked by hand, are untouched.
 function PfQuestImport:Undo()
     local history = History()
@@ -430,51 +569,56 @@ function PfQuestImport:Undo()
 end
 
 -- ONE LINE, for the options page. Never more than about 80 characters, because
--- the page reserves a single body line for it and cannot re-measure the line
--- after a rewrite (Core/Settings.lua, page.Body's reservedLines) -- a longer
--- string would wrap into the button underneath it.
+-- the page reserves a fixed two-line body for it and cannot re-measure the text
+-- after a rewrite (Core/Settings.lua, BuildImportSection) -- a longer string
+-- would wrap into the row underneath it.
 --
 -- The page gets the headline and `/pq pfquest` gets the breakdown, which is
 -- the right split anyway: the page answers "is there anything to do here", and
 -- a player who wants to know why 12 quests were skipped is already the kind of
 -- player who will type the command.
-function PfQuestImport:DescribeShort(report)
-    report = report or self:Scan()
+function PfQuestImport:DescribeShort(report, sourceId)
+    report = report or self:Scan(sourceId)
+    local def = DefOf(report.source)
 
     if report.found then
         if report.entries == 0 then
-            return PQ.L("PFQUEST_SHORT_EMPTY_HISTORY")
+            return Text(def, "SHORT_EMPTY_HISTORY")
         end
         if report.importable > 0 then
-            return PQ.LN("PFQUEST_SHORT_READY", report.importable)
+            return TextN(def, "SHORT_READY", report.importable)
         end
-        return PQ.L("PFQUEST_SHORT_NOTHING_NEW")
+        return Text(def, "SHORT_NOTHING_NEW")
     end
 
-    local status = self:GetState()
+    local status = self:GetState(def.id)
     if status.state == "pending" then
-        return PQ.L("PFQUEST_SHORT_PENDING")
+        return Text(def, "SHORT_PENDING")
     end
     if status.state == "disabled" then
-        return PQ.L("PFQUEST_SHORT_DISABLED")
+        return Text(def, "SHORT_DISABLED")
     end
     if status.state == "missing" then
-        return PQ.L("PFQUEST_SHORT_MISSING")
+        return Text(def, "SHORT_MISSING")
     end
     if status.state == "empty" then
-        return PQ.L("PFQUEST_SHORT_EMPTY")
+        return Text(def, "SHORT_EMPTY")
     end
-    return PQ.L("PFQUEST_SHORT_NO_HISTORY_YET")
+    return Text(def, "SHORT_NO_HISTORY_YET")
 end
 
 -- The full breakdown, for `/pq pfquest` and for the line printed after a
 -- press. Several sentences is fine here -- chat wraps and scrolls, and this is
 -- where a player goes to find out WHY a count is what it is.
-function PfQuestImport:Describe(report)
-    report = report or self:Scan()
+function PfQuestImport:Describe(report, sourceId)
+    report = report or self:Scan(sourceId)
+    local def = DefOf(report.source)
 
     if not report.found then
-        local status = self:GetState()
+        local status = self:GetState(def.id)
+        if not def.legacy then
+            return self:DescribeShort(report)
+        end
         if status.state == "pending" then
             return PQ.L("PFQUEST_LONG_PENDING")
         end
@@ -491,11 +635,17 @@ function PfQuestImport:Describe(report)
     end
 
     if report.entries == 0 then
-        return PQ.L("PFQUEST_SHORT_EMPTY_HISTORY")
+        return Text(def, "SHORT_EMPTY_HISTORY")
     end
 
-    local text = PQ.L("PFQUEST_LONG_COUNTS", tostring(report.entries),
-        tostring(report.importable), tostring(report.alreadyDone))
+    local text
+    if def.legacy then
+        text = PQ.L("PFQUEST_LONG_COUNTS", tostring(report.entries),
+            tostring(report.importable), tostring(report.alreadyDone))
+    else
+        text = PQ.L("IMPORT_LONG_COUNTS", def.name, tostring(report.entries),
+            tostring(report.importable), tostring(report.alreadyDone))
+    end
     if report.waiting > 0 then
         text = text .. " " .. PQ.L("PFQUEST_LONG_WAITING", tostring(report.waiting))
     end
@@ -512,51 +662,57 @@ function PfQuestImport:Describe(report)
     return text
 end
 
--- What the options page's single button should say right now. The button does
--- whatever the situation needs (see :Press), so its label is the only thing
--- telling the player which of those it is about to do -- a button reading
--- "Import from pfQuest" that actually enables an addon and asks for a reload
--- would be lying about a change to their addon list.
-function PfQuestImport:GetButtonLabel()
-    local state = self:GetState().state
+-- What the source's button should say right now. The button does whatever the
+-- situation needs (see :Press), so its label is the only thing telling the
+-- player which of those it is about to do -- a button reading "Import from
+-- pfQuest" that actually enables an addon and asks for a reload would be lying
+-- about a change to their addon list.
+function PfQuestImport:GetButtonLabel(sourceId)
+    local status = self:GetState(sourceId)
+    local def = DefOf(status.sourceId)
+    local state = status.state
     if state == "ready" then
-        return PQ.L("PFQUEST_BUTTON_IMPORT")
+        return Text(def, "BUTTON_IMPORT")
     end
     if state == "pending" then
         return PQ.L("PFQUEST_BUTTON_WAITING")
     end
     if state == "missing" then
-        return PQ.L("PFQUEST_BUTTON_NOT_INSTALLED")
+        return Text(def, "BUTTON_NOT_INSTALLED")
     end
     if state == "empty" then
-        return PQ.L("PFQUEST_BUTTON_NO_HISTORY")
+        return Text(def, "BUTTON_NO_HISTORY")
     end
-    return PQ.L("PFQUEST_BUTTON_ENABLE_AND_IMPORT")
+    if status.busy then
+        return PQ.L("IMPORT_BUTTON_BUSY")
+    end
+    return Text(def, "BUTTON_ENABLE_AND_IMPORT")
 end
 
--- The one action behind the options-page button and `/pq pfquest import`.
--- Chooses by state so both surfaces behave identically, and reports what it
--- did in chat -- including the two cases where the answer is "nothing yet, and
--- here is what you have to do".
+-- The one action behind a source's button and `/pq pfquest import`. Chooses by
+-- state so both surfaces behave identically, and reports what it did in chat --
+-- including the cases where the answer is "nothing yet, and here is what you
+-- have to do".
 --
 -- Returns the state word it acted on, for callers that want to branch further.
-function PfQuestImport:Press()
-    local status = self:GetState()
+function PfQuestImport:Press(sourceId)
+    local status = self:GetState(sourceId)
+    local def = DefOf(status.sourceId)
 
     if status.state == "missing" then
-        PQ:Print(PQ.L("PFQUEST_PRESS_MISSING"))
+        PQ:Print(Text(def, "PRESS_MISSING"))
         return status.state
     end
 
     if status.state == "empty" then
-        PQ:Print(PQ.L("PFQUEST_PRESS_EMPTY"))
+        PQ:Print(Text(def, "PRESS_EMPTY"))
         return status.state
     end
 
     if status.state == "ready" then
-        local report = self:Import()
+        local report = self:Import(def.id)
         if report.imported > 0 then
-            PQ:Print(PQ.LN("PFQUEST_IMPORTED", report.imported))
+            PQ:Print(TextN(def, "IMPORTED", report.imported))
         else
             PQ:Print(PQ.L("PFQUEST_NOTHING_NEW", self:Describe(report)))
         end
@@ -564,75 +720,84 @@ function PfQuestImport:Press()
     end
 
     if status.state == "pending" then
-        PQ:Print(PQ.L("PFQUEST_PRESS_ALREADY_PENDING"))
+        PQ:Print(Text(def, "PRESS_ALREADY_PENDING"))
         return status.state
     end
 
-    local outcome = self:BeginAutoEnable()
+    local outcome = self:BeginAutoEnable(def.id)
     if outcome == "refused" then
-        PQ:Print(PQ.L("PFQUEST_ENABLE_REFUSED"))
+        PQ:Print(Text(def, "ENABLE_REFUSED"))
+    elseif outcome == "busy" then
+        PQ:Print(PQ.L("IMPORT_PRESS_BUSY"))
     elseif outcome == "asked" then
-        PQ:Print(PQ.L("PFQUEST_ENABLED_FOR_RELOAD"))
-        PQ:Print("  " .. PQ.L("PFQUEST_ENABLED_FOR_RELOAD_HINT"))
+        PQ:Print(Text(def, "ENABLED_FOR_RELOAD"))
+        PQ:Print("  " .. Text(def, "ENABLED_FOR_RELOAD_HINT"))
     end
     return status.state
 end
 
 -- The capability is re-declared on every scan rather than fixed at load,
--- because whether pfQuest's data is reachable is a fact about the player's
+-- because whether the source's data is reachable is a fact about the player's
 -- install that can only be observed by looking -- and looking is what a scan
 -- does. `detected` means the global was actually found this session.
 function PfQuestImport:DeclareState(report)
+    local def = DefOf(report and report.source)
+    local where = def.global
+    if def.field then
+        where = where .. "." .. def.field
+    end
+
     if report and report.found then
-        PQ:DeclareCapability(CAPABILITY, "detected",
-            "pfQuest's " .. SOURCE_GLOBAL .. " saved variable is loaded and readable; "
+        PQ:DeclareCapability(def.capability, "detected",
+            def.name .. "'s " .. where .. " saved variable is loaded and readable; "
             .. tostring(report.entries) .. " completed quest(s) in it, "
             .. tostring(report.importable) .. " importable into this addon's quest history")
         return
     end
 
     -- Not loaded is several different situations, and /pq status is the place
-    -- a player looks to find out WHICH -- "you never had pfQuest" and "your
-    -- pfQuest is one command away" must not print the same row.
-    local status = self:GetState()
-    local note = "pfQuest's " .. SOURCE_GLOBAL .. " saved variable is not loaded. It is a "
-        .. "SavedVariablesPerCharacter of the pfQuest addon, so it is in memory only while "
-        .. "pfQuest is enabled -- this client offers no way to read the file otherwise, so "
+    -- a player looks to find out WHICH -- "you never had it" and "it is one
+    -- command away" must not print the same row.
+    local status = self:GetState(def.id)
+    local note = def.name .. "'s " .. where .. " saved variable is not loaded. It is a "
+        .. "SavedVariablesPerCharacter of the " .. def.name .. " addon, so it is in memory only while "
+        .. "that addon is enabled -- this client offers no way to read the file otherwise, so "
         .. "an absent global cannot be told apart from an empty history. "
 
     if status.state == "pending" then
-        note = note .. "pfQuest has been switched on for one reload and the import is "
+        note = note .. def.name .. " has been switched on for one reload and the import is "
             .. "waiting for it; type /reload. ReloadUI is protected here, so the addon "
             .. "cannot do that step for the player"
     elseif status.state == "disabled" then
-        note = note .. "pfQuest (" .. tostring(status.addon) .. ") IS installed, just "
-            .. "disabled: /pq pfquest import switches it on for one reload, imports, and "
-            .. "switches it back off"
+        note = note .. def.name .. " (" .. tostring(status.addon) .. ") IS installed, just "
+            .. "disabled: the Import settings page (or /pq pfquest import for pfQuest) "
+            .. "switches it on for one reload, imports, and switches it back off"
     elseif status.state == "missing" then
-        note = note .. "no pfQuest variant is installed, so there is nothing to import from"
+        note = note .. "no " .. def.name .. " variant is installed, so there is nothing to import from"
     elseif status.state == "empty" then
-        note = note .. "pfQuest (" .. tostring(status.addon) .. ") is enabled and loaded and "
+        note = note .. def.name .. " (" .. tostring(status.addon) .. ") is enabled and loaded and "
             .. "has simply recorded no completed quests for this character; a reload would "
             .. "not change that, so nothing offers one"
     else
-        note = note .. "pfQuest (" .. tostring(status.addon) .. ") is enabled but its files "
+        note = note .. def.name .. " (" .. tostring(status.addon) .. ") is enabled but its files "
             .. "have not run yet; a reload is all that is missing"
     end
 
-    PQ:DeclareCapability(CAPABILITY, "missing", note)
+    PQ:DeclareCapability(def.capability, "missing", note)
 end
 
 -- The second half of the auto-enable flow, running on the load after the
 -- player typed /reload.
 --
--- A POLL, not an event and not a one-shot read: nothing measured orders
--- pfQuest's files against this addon's OnEnable, so this looks once a second
+-- A POLL, not an event and not a one-shot read: nothing measured orders the
+-- source's files against this addon's OnEnable, so this looks once a second
 -- until the history appears or the window closes. Either way it ends by
--- restoring pfQuest's enabled state and unscheduling itself -- there is no
+-- restoring the addon's enabled state and unscheduling itself -- there is no
 -- path out of here that leaves the job running or the flag set.
 function PfQuestImport:ResumeAutoImport()
     local driver = PQ:GetModule("Driver")
-    -- Returns whether pfQuest was actually switched back off, so the player is
+    local def = DefOf(self.resumeSource)
+    -- Returns whether the addon was actually switched back off, so the player is
     -- only told that when it happened.
     local function Finish()
         local restored = self:RestoreAddOnState()
@@ -642,16 +807,16 @@ function PfQuestImport:ResumeAutoImport()
         return restored
     end
 
-    if self:GetSource() then
-        local report = self:Import()
+    if self:GetSource(def.id) then
+        local report = self:Import(def.id)
         local restored = Finish()
         if report.imported > 0 then
-            PQ:Print(PQ.LN("PFQUEST_IMPORTED", report.imported))
+            PQ:Print(TextN(def, "IMPORTED", report.imported))
         else
-            PQ:Print(PQ.L("PFQUEST_RESUME_NOTHING_NEW"))
+            PQ:Print(Text(def, "RESUME_NOTHING_NEW"))
         end
         if restored then
-            PQ:Print("  " .. PQ.L("PFQUEST_RESTORED_OFF"))
+            PQ:Print("  " .. Text(def, "RESTORED_OFF"))
         end
         return
     end
@@ -662,20 +827,25 @@ function PfQuestImport:ResumeAutoImport()
     end
 
     Finish()
-    PQ:Print(PQ.L("PFQUEST_RESUME_TIMED_OUT"))
+    PQ:Print(Text(def, "RESUME_TIMED_OUT"))
 end
 
--- One look at enable, so `/pq status` has an honest row before the player ever
--- opens the options page (Scan declares the capability itself). This is a look,
--- not a dependency: nothing here registers an event or waits for pfQuest, and
--- every later scan re-declares the row from what it finds then -- which is the
--- part that matters, since a global that was absent at enable may be there by
--- the time the player asks.
+-- One look at enable, so `/pq status` has an honest row for every source before
+-- the player ever opens the options page (Scan declares the capability itself).
+-- This is a look, not a dependency: nothing here registers an event or waits for
+-- the source, and every later scan re-declares the row from what it finds then
+-- -- which is the part that matters, since a global that was absent at enable
+-- may be there by the time the player asks.
 --
 -- The one job it may schedule is the resume, and only when a flag left by a
 -- previous session says an import is waiting for this reload.
 function PfQuestImport:OnEnable()
-    self:Scan()
+    local index = 1
+    local total = table.getn(SOURCES)
+    while index <= total do
+        self:Scan(SOURCES[index].id)
+        index = index + 1
+    end
 
     local config = Config()
     local pending = config and config:GetCharacter(PENDING_KEY)
@@ -683,11 +853,15 @@ function PfQuestImport:OnEnable()
         return
     end
 
+    -- An addon folder no source names (a flag from some other version) is read
+    -- as pfQuest's, the only source there was when the flag was introduced.
+    local owner = DefOfAddon(pending) or SOURCES[1]
+    self.resumeSource = owner.id
     self.resumeWaited = 0
     local driver = PQ:GetModule("Driver")
     if not driver then
         -- No driver means no poll and no second chance, so take the one look
-        -- available and put pfQuest back either way.
+        -- available and put the addon back either way.
         self:ResumeAutoImport()
         return
     end

@@ -19,7 +19,7 @@ PandaQuest = {}
 local PQ = PandaQuest
 
 PQ.name = "PandaQuest"
-PQ.version = "0.5.2"
+PQ.version = "0.5.3"
 
 -- Keep PandaQuest visually aligned with PandaUI without creating a runtime
 -- dependency between the two addons. These values mirror PandaUI's shared

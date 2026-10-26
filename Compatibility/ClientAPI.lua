@@ -9483,6 +9483,11 @@ function Client.CreateStyledTextButton(parent, name, width, height, text)
             QuestLogSkin.Paint(button, true)
             return
         end
+        -- A host that dresses the button draws its own hover (pandaUI's glow);
+        -- the accent outline on top of it read as a second highlight.
+        if button.pandaQuestHostHover then
+            return
+        end
         SetFlatBorderColor(button, PQ.colors.accent[1], PQ.colors.accent[2],
             PQ.colors.accent[3], button.pandaQuestActive and 1
                 or PQ.colors.accent[4])
@@ -15258,9 +15263,14 @@ SettingsList.LIST_ROW_TEXT_INSET = 6
 -- seeing the rows in game.
 SettingsList.LIST_ROW_TEXT_DROP = -6
 
+-- `textDrop`, when given, replaces LIST_ROW_TEXT_DROP for this row. The mob
+-- result table passes its own: at -6 its 20px rows drew the text ~5px below
+-- the stripe's centre (screenshot, 2026-10-26).
 function Client.CreateSettingsListRow(parent, name, offsetX, offsetY, width, height,
-    striped, onClick)
+    striped, onClick, textDrop)
     local create = Resolve("CreateFrame")
+    local drop = type(textDrop) == "number" and textDrop
+        or SettingsList.LIST_ROW_TEXT_DROP
     if not create or not parent or type(name) ~= "string" then
         return nil
     end
@@ -15322,7 +15332,7 @@ function Client.CreateSettingsListRow(parent, name, offsetX, offsetY, width, hei
     row.action = Text("RIGHT")
     if row.action then
         pcall(row.action.SetPoint, row.action, "RIGHT", button, "RIGHT",
-            -SettingsList.LIST_ROW_TEXT_INSET, SettingsList.LIST_ROW_TEXT_DROP)
+            -SettingsList.LIST_ROW_TEXT_INSET, drop)
     end
     row.name = Text("LEFT")
     -- The same fields a settings button carries, so anything reading a line
@@ -15331,13 +15341,13 @@ function Client.CreateSettingsListRow(parent, name, offsetX, offsetY, width, hei
     button.pandaQuestActive = false
     if row.name then
         pcall(row.name.SetPoint, row.name, "LEFT", button, "LEFT",
-            SettingsList.LIST_ROW_TEXT_INSET, SettingsList.LIST_ROW_TEXT_DROP)
+            SettingsList.LIST_ROW_TEXT_INSET, drop)
         if row.action then
             pcall(row.name.SetPoint, row.name, "RIGHT", row.action, "LEFT",
                 -SettingsList.LIST_ROW_TEXT_INSET, 0)
         else
             pcall(row.name.SetPoint, row.name, "RIGHT", button, "RIGHT",
-                -SettingsList.LIST_ROW_TEXT_INSET, SettingsList.LIST_ROW_TEXT_DROP)
+                -SettingsList.LIST_ROW_TEXT_INSET, drop)
         end
     end
 
@@ -15772,7 +15782,55 @@ function Client.CreateSettingsButton(parent, name, text, offsetX, offsetY, width
             onClick()
         end)
     end
+    -- `label` is the field pandaUI's Game Settings window re-centres when it
+    -- dresses a Button in its red face, at the geometric centre its own
+    -- dressed controls use. Without it the flat face's -2 stayed and the
+    -- caption read low on the red face (screenshot, 2026-10-26).
+    button.label = button.pandaQuestLabel
     return button
+end
+
+-- A small close button on the settings page, drawn with the standalone quest
+-- log's close cells from QuestLogRedButton (STANDALONE_QUEST_LOG.SetCloseFace):
+-- the same file and cells, so the client's own button states drive the
+-- normal, pushed, disabled and hover faces.
+--
+-- Returned as a control table rather than the Button, like the list rows, so
+-- a host that dresses every settings Button leaves its art alone.
+function Client.CreateSettingsCloseButton(parent, name, offsetX, offsetY, size, onClick)
+    local create = Resolve("CreateFrame")
+    if not create or not parent or type(name) ~= "string" then
+        return nil
+    end
+    local ok, button = pcall(create, "Button", name, parent)
+    if not ok or not button then
+        return nil
+    end
+    Client.SetObjectSize(button, size, size)
+    pcall(button.SetPoint, button, "TOPLEFT", parent, "TOPLEFT",
+        type(offsetX) == "number" and offsetX or 0,
+        type(offsetY) == "number" and offsetY or 0)
+    if type(button.EnableMouse) == "function" then
+        pcall(button.EnableMouse, button, true)
+    end
+    if type(button.RegisterForClicks) == "function" then
+        pcall(button.RegisterForClicks, button, "LeftButtonUp")
+    end
+    local cells = STANDALONE_QUEST_LOG.closeCell
+    STANDALONE_QUEST_LOG.SetCloseFace(button, "SetNormalTexture",
+        "GetNormalTexture", cells.normal)
+    STANDALONE_QUEST_LOG.SetCloseFace(button, "SetPushedTexture",
+        "GetPushedTexture", cells.pushed)
+    STANDALONE_QUEST_LOG.SetCloseFace(button, "SetDisabledTexture",
+        "GetDisabledTexture", cells.disabled)
+    STANDALONE_QUEST_LOG.SetCloseFace(button, "SetHighlightTexture",
+        "GetHighlightTexture", cells.highlight)
+    if type(onClick) == "function" then
+        Client.SetObjectScript(button, "OnClick", function()
+            onClick()
+        end)
+    end
+    return { button = button, puiParts = { button } }
 end
 
 -- A one-choice dropdown for the standalone page: the same owned, flat shape as
