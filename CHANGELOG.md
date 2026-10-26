@@ -1,0 +1,355 @@
+# Changelog
+
+## Unreleased
+
+- Settings: with pandaUI, PandaQuest pages now use the game's settings text size instead of a shrunk page.
+- Settings: PandaQuest pages now use the PandaQuest mascot watermark.
+- Performance: fewer short freezes while idle; the quest log's row highlights no longer create garbage every 0.3 s.
+- Tracker: with pandaUI, the quest tracker now draws under the game settings window instead of over it.
+- Tooltips: removed the grey divider line between stacked quests in map and tracker tooltips; it could also linger as a stray line near later tooltips.
+- Fix race- and class-locked quests showing for every character on OctoWoW: the client reports race and class by name only, so the quest filter never learned them. Quests for other races (including Turtle's Goblin and High Elf) and other classes are hidden again.
+- Russian and Chinese now display on English clients. The client's own font has no Cyrillic or Chinese characters, so switching a quest (or the interface) to either language showed blank text with only the punctuation left. Labels whose text needs those characters now switch to a bundled font (PT Sans Narrow, SIL OFL 1.1; see `media/Fonts/ATTRIBUTION.md`) and switch back when they show Latin text again. This covers the quest log, quest-giver window, dialogue, tracker, map tooltips and settings.
+- World map: when an NPC both offers a quest and takes one of yours (Guard Thomas, Supervisor Raelen, Marshal Dughan…), the "!" and the "?" now sit side by side instead of the "!" hiding the "?", so a quest ready to hand in there is visible again.
+- World map: the followed quest's objective dots show their quest colour inside the gold rim again, instead of drawing solid gold (matching the minimap).
+- World map: a quest's numbered red circle no longer sometimes shows without its number. The circle and its glow could draw over the number; they are now part of the number's own marker, drawn beneath it.
+- Fix the navigation arrow and the rare/elite alert arrow not showing when pandaUI is enabled: pandaUI's player arrow hides the native minimap arrow, which PandaQuest read the player's facing from.
+- Turtle WoW 1.18.1 world data: the database now merges pfQuest-turtle 1.0.38 (Rivi) over the Vanilla data — about 2,450 new quests, 5,000 new creatures and 12,000 new objects, with Turtle's changed and removed quests, spawns, items, zones and gathering nodes. Built offline by `tools/import_turtle_db.py`; see `docs/TURTLE-DB.md`.
+- Translations follow the Turtle data: a translation is kept only while it still matches the English quest, so Turtle quests show no French flag, and names with no translation read in English on non-English clients.
+- Turtle's Heroic Training Dummy and tokenless city elites no longer appear as Rare/Elite/Boss pins or raise the boss alert.
+- Quest dialogue: one click on Complete now hands a quest in. Before, the card closed and came back as a second reward page that needed another Complete. That page now appears only when you still have to choose between several reward items and didn't pick one on the first page.
+- Patrol routes, class trainers and sell prices still come from the Vanilla data; Turtle-only creatures have no patrol yet (see `docs/ROADMAP.md`).
+
+## 0.5.2
+
+- Add the quest number icon on the mobs nameplate
+
+## 0.5.1
+
+- Fix the UI for the new client update 2432
+
+## 0.5.0
+
+- Added immersive quest dialogue with 6 themes
+- Added option to auto-accept and complete quests
+- Added quest marker on the target frame
+- Dungeon and raid icons now use retail images
+- Added min/max levels for each dungeon on the map
+- Completed quest numbers now appear in a green circle
+- Quest number icons no longer appear on the map when the quest is complete
+
+## 0.4.1
+
+- Few optimisations done
+- Elite quests now show a "+" after their level ("[11+]"), like dungeon quests, in the trackers, the quest log and the world map tooltip. A quest counts as elite when it sends you after an elite, rare-elite or boss creature, or after an item only such creatures drop.
+- The followed quest is now highlighted with the tracker's golden bar glow, both in the quest trackers and in the quest log, instead of the gold plaque.
+- New "Auto accept and complete quests" option on the Quest dialogue tab (off by default): offered quests are accepted, finished quests are handed in and their reward taken. A reward you must choose from several items is left to you.
+- Minimal dialogue: talking to a quest giver who has gossip options now lists those options inside the card, one per line, on the same silver buttons as Accept and Decline (all as wide as the longest option, not the card's full width, and the card itself narrows to them), instead of showing the NPC's text; the card grows to fit them. A quest giver's greeting (several quests to pick from) lists its quests the same way.
+- A quest offered right after handing one in now opens as an offer with Accept, not as a turn-in with Complete.
+- Minimal dialogue: "Quest Giver" under the NPC's name is now grey instead of gold.
+- Minimal dialogue: on the quest card the header colours are swapped: the NPC's name is grey and the quest title gold.
+- Minimal dialogue: the card now sits two thirds of the way down the screen instead of in the middle.
+- Minimal dialogue: the experience and reputation on the reward line are drawn in white.
+- Minimal dialogue: the card is now sized from the widths the client really draws the text at, so the reward line (and the name, title and role) can no longer run past the card's border.
+- Quest dialogue: reward money is drawn with gold, silver and copper coin icons in every theme, instead of "1g 50s" text.
+- Quest dialogue: a new profile starts on the Minimal theme (existing profiles keep their choice), and the theme dropdown now reads Minimal, Parchment, Alliance, Horde, Alliance light, Horde light.
+- Quest dialogue: the theme keys and texture names now match the theme names (parchment, alliance, horde, alliance-light, horde-light, minimal); a saved choice is carried over once, and an unrecognised one falls back to Minimal.
+- Minimal dialogue: the quest card shows a "!" (quest to accept) or "?" (quest to hand in) badge under the language flags.
+- Handing in a quest now shows its objectives with their counts from the quest log (for example "Kobold Vermin slain: 10/10") instead of the quest's objective text.
+- Minimal dialogue: the Complete (and Accept) button widens to fit its label and key hint, so "Space" no longer runs past the button's edge; the Decline / Cancel button moves over to keep its gap.
+- Without pandaUI, the first language now follows the game client: Chinese for a Chinese client, Russian for a Russian client, English otherwise
+- Accepting a quest no longer performs a second full tracker layout inside the quest-log scan.
+- Quest-area geometry is spread across bounded driver slices without changing its resolution or shape.
+- Immersive quest dialogue now uses a compact framed parchment card centred below the middle of the screen, with the choice stack on the right as in Immersion, instead of a full-screen window. Click the card to continue or accept, right-click to page; Escape or clicking away from the NPC closes it. Quest rewards show under the text, and returning to a quest giver shows the required items with their counts under the text, whether the quest can be turned in, and the rewards it will give.
+- The quest dialogue has two themes, chosen beside the "Immersive quest dialogue" option: Cinematic (the default), a larger bronze-framed card with "Quest Giver" and the NPC's name on a wood band, the portrait in its own gold frame, a "Quest" kicker over a large quest title and its divider, wooden choice rows and ornate reward banners, and Classic, the parchment card. The Cinematic card's art and text now line up instead of the text running past the frame, and the whole dialogue (cards, choices, rewards panel and reward window) is drawn 40% smaller, text included.
+- The Classic dialogue now has Cinematic's header (the "Quest" badge with the page number beside it, the left-aligned quest title and Alliance V2's ornate divider) and shows a quest's objectives under its text, below a divider and beside the objective badge; its NPC name is left-aligned too, and its portrait frame now covers the whole scene behind the 3D portrait.
+- The dialogue themes are renamed and reordered in the options: Parchment (was Classic), Alliance (was Alliance V2), Horde (was Horde V2), Horde light (was Cinematic) and Alliance light (was Alliance). Saved choices carry over unchanged. The theme is now picked from a dropdown instead of a list of radio buttons, and the Quest dialogue tab's first option sits 10px lower.
+- Each dialogue theme now applies its own size immediately when selected, without a reload. Alliance V2 remains 29.6% larger than the other themes while keeping their text size.
+- The Parchment dialogue's choice rows are now gold-framed parchment buttons with their own hover and pressed looks, and dark text, instead of dark bars.
+- Alliance V2's conversation card has a new frame with banners on both posts, at the same size as before; the quest card keeps its frame.
+- Objective text now begins on the same left edge as the Objectives heading in every language; short Latin lines no longer centre themselves inside the translated text box, and Alliance V2 keeps the body a further 5px below the heading and 5px clear of the right frame.
+- The Cinematic dialogue's quest badge shows "!" on a quest to accept and "?" on a quest to turn in.
+- The Cinematic dialogue's reward banners are taller, with larger item icons. With pandaUI installed, hovering a gear reward in the dialogue shows pandaUI's comparison with your equipped item and the stat changes.
+- The quest dialogue shows a scene of the quest's zone behind the portrait, or of the zone you are in, in every theme; 40 outdoor zones have their own art, one set shared by all themes.
+- Quest and gossip prose starts directly beneath the title divider and writes itself letter by letter without drifting, with short pauses at punctuation; click the card once to reveal the page immediately, then click again to continue. New letters fall into place from above using native kerning measurements. Landed letters stay in the reveal layer until the page is complete, then the whole page changes to one native paragraph at once, avoiding both overlapping copies and the horizontal shimmer from rebuilding the paragraph after every character.
+- Zone-grouped trackers now show each zone once, with completed quests at the bottom of that zone.
+- The quest tracker's header rails, zone bars and objective marks are drawn from the original full-resolution art instead of a half-size copy, so they stay sharp at large UI scales.
+- Quest creatures show Retail's quest shield on the pandaUI target portrait.
+- The Alliance V2 dialogue has an "Accept Quest" / "Complete Quest" button on the card's bottom border, with hover and pressed faces; it stays greyed out until the quest's objectives are done. The rewards panel now hangs just below it.
+- The Horde light, Alliance light and Parchment dialogues have the same "Accept Quest" / "Complete Quest" button on the quest card's bottom border, drawn as the quest log's red button, with the same red glow on hover, a pressed face, and a grey face until the objectives are done.
+- Choosing a quest from an NPC's gossip no longer makes the dialogue blink out and back in: the card stays up while the quest page takes over from the gossip page.
+- New Minimal dialogue theme, the smallest card: a dark card with a thin gold edge, the portrait, the NPC's name and the quest title, the objectives on one line, the money, experience and reputation on one line beside flat Decline (Esc) and Accept buttons, and no quest text. Item rewards still show as tiles under the card. Pick it last in the theme dropdown.
+- The Alliance, Horde light and Alliance light dialogues' quest cards grow taller with a long objective, so the objective text never runs under or crowds the Accept / Complete button.
+- The Alliance, Horde and Alliance light dialogues' quest cards draw the Parchment theme's brown divider above the objectives.
+- The Horde dialogue's "Complete Quest" button no longer cuts its label short; a label too long for the space between the arrows moves left of the arrow instead.
+- The Horde light quest card's left and right borders no longer show a stack of repeated spikes along the parchment's edge.
+- Quest objectives in the dialogue no longer show the blank line between their steps, so they take less height.
+
+## 0.4.0
+
+- Immersive gossip rows now use PandaQuest's own high-resolution service and quest icons.
+- Reworked quest tracker windows
+- Reworked quest area mode, now works on Retail
+- Added quest numbers to the map and quest tracker windows
+- Quest tracker windows now display on the map
+- Can now display dots and/or areas on the map and minimap
+- Item rewards now show an icon for the best-value item to sell and better gear to wear
+
+## 0.3.5
+
+- Added loot and drop rate to boss tooltips on the map.
+- Fixed the interface for the latest client update.
+- Fixed the progress bar not turning green when completing objectives for items not flagged as quest items.
+- Profession quests are no longer displayed on the map if you don't have the related profession.
+- Added a + to the quest level when the quest is related to a dungeon.
+- Fixed flickering red button on modern wow theme
+
+
+## 0.3.4
+
+- Show experience and reputation in the interface when accepting or turning in a quest.
+- Translate quests when accepting or turning them in.
+- Add the estimated time to reach the position.
+- Fixed tooltips sometimes showing at the wrong level.
+
+- With pandaUI installed, PandaQuest is now a submenu in pandaUI's settings list: an "PandaQuest" entry that opens to "General" and "Mob tracking", instead of one row with its own tabs across the top of the page. "/pq config" takes you back to whichever of the two you were last on. Without pandaUI the settings window is unchanged and keeps its two tabs.
+
+- The quest log's Show, Track and Follow buttons have a new look when pandaUI is not installed or is using its Modern WoW theme: Show and Track are red buttons, and Follow is a red button with a gold rim so the one that steers your arrow stands apart. They light up under the cursor, and Follow still turns its label gold with the arrow while that quest is the one you are following. Every other pandaUI theme keeps the flat buttons it had. Under Modern WoW the thin line that sat above the three buttons is gone too, since that page draws its own edge.
+
+- Quest log objectives on pandaUI's Modern and Modern WoW quest logs now show how far along each one is: grey while nothing is done yet, orange once some of it is, and green when it is complete.
+
+- The money a quest rewards now has its own coin row in the quest log, directly under "You will receive:" -- each amount in white followed by its gold, silver or copper coin, laid out like pandaUI's status bar and without a text shadow -- instead of the game's own coin row, which kept misbehaving on the reshaped quest log. Reward items move down to make room for it.
+
+- The experience and reputation lines under a quest's rewards now have a drop shadow, so they stay readable on light and dark pages alike.
+
+- Fixed everything in the quest log's description flickering while it was scrolled down. The experience and reputation lines were being put back in place several times a second even when nothing had changed, and every time they were, the game drew the whole scrolled description at its unscrolled position for a moment. They are now only placed again when something about them actually changes.
+
+- Fixed a quest getting stuck as "ready to turn in" when it is not. If a quest item is destroyed or sold after it was looted, the game can keep reporting the quest as complete even though its own log line reads "0/1" again, and the map, tracker and arrow all went on pointing at the turn-in NPC with no way back to the objective -- "The Dead Fields" in Silverpine was the case reported. The addon now checks every quest the game calls complete against its objective counters: at login, after a reload, and continuously while you play, so deleting or selling the item is noticed within a moment. A counter that is short puts the quest back to its objective, and picking the item up again makes it ready to turn in once more.
+
+- Fixed the experience and reputation lines being drawn on top of the reward item on a quest-giver's offer window. They are placed under whatever ends the reward block, and that was taken to be the coin row, which this client draws beside "You will receive:" above the item buttons rather than below them. The addon now measures where each part of the reward block actually sits and puts the lines under the lowest of them, and drops them a little further when that is a reward button, whose plate is drawn past the edge the game reports for it. They clear the reward whichever way the window is laid out.
+
+- "Proving Allegiance" in Tirisfal now shows you where to go. It used to show nothing at all on either map: the only thing the quest data records for it is Lillith Nefara, who is summoned rather than standing anywhere, so there were no coordinates to draw. The two places you actually have to walk to were in the data all along with nobody linking them to the quest -- the crate the Candle of Beckoning is taken from, and the altar it is lit on -- and the quest now points at the crate until you are carrying the candle and at the altar afterwards, the same way every other fetch-and-use quest already behaves.
+
+- Reward names on the turn-in window are now drawn in the item's own quality colour -- green for uncommon, blue for rare, purple for epic -- so a choice between two rewards says at a glance which is the rarer one instead of showing both in the same flat colour. It reads the quality the game itself reports for the window that is open, and a reward the game has not filled in yet simply keeps the colour it had rather than being painted grey. It works on a quest you are reading in another language too: the addon remembers which reward each translated name replaced. "Reward names in quality colours" in the settings turns it off, and the names go straight back to how they were without a reload.
+
+## 0.3.3
+
+- The settings window has a second tab, "Mob tracking": a search box over the bundled creature data and the results it finds, a page at a time, each with its name, its level and the zone it is recorded in. Searching with the field empty browses everything. Clicking a result tracks that creature -- it is pinned on the world map and on the minimap wherever the data records it spawning, and the arrow below points the way to the nearest of those places. It is the addon's own data being searched rather than the world around you: a creature with no recorded spawn cannot be found this way, and every pin is a place the creature is recorded as appearing, not one standing there now.
+
+- A creature you track from the Mob tracking tab now gets an arrow of its own. It is a second dial, separate from the quest one in every way: its own place on the screen, dragged wherever you want it and remembered there, so you can have both on screen at once without them fighting over the same spot. It wears the same gold as the tracked-mob pins and names the creature above it, and it points at the nearest place that creature is recorded as spawning -- walking past one spawn hands the arrow to the next. That exact spot is ringed on the world map and the minimap, the same way the quest you are following is ringed, because a tracked creature usually leaves a field of identical dots and the ring says which of them the arrow chose. It is pointing at a recorded spawn, not at a living mob: nothing on this client can find a creature that is actually standing there. "Show tracked mob navigator" in the settings turns it off, and "/pq mobnav" says what it is aiming at and why it is hidden when it is.
+
+- The creature you are tracking now sticks to the edge of the minimap instead of disappearing off it. It keeps the direction it is really in and fades a little to say "further away than this", the same way a quest giver or turn-in already behaves out there, and the ring marking the spawn your arrow is aiming at rides the edge with it. Nothing else changes: a vendor or a herb that is off the minimap is still simply not drawn, because piling a dozen of them onto one point on the rim would claim they are somewhere they are not. This one does not ask permission: "Clamp off-view minimap markers to the edge" is about the markers that appear around you on their own, and turning it off is a request for a quieter minimap -- the creature you named and asked to be led to is not part of that crowd, so it sticks to the edge either way.
+
+- The tracked creature's line now says which zone it is in, next to its name and level -- the zone you are standing in when it lives there too, otherwise the zone most of its spawns are recorded in. Its level also stopped being printed inside two sets of brackets.
+
+- One creature is tracked at a time, and it now has its own line between the search box and the results, with a red cross on the right to stop. Tracking another one replaces it rather than adding to it -- with several tracked the arrow kept changing its mind about which one you were going to, naming a different creature every few steps. That line is the whole of it: it says what you are tracking right now whatever the search below is showing, the cross takes the arrow and both map rings away with it, and taking another creature rewrites it, which is the replacement rule in plain sight.
+
+- Creature and object tooltips now carry the respawn time the bundled data records for them -- "Respawn: 5 min", or a range when the data holds two figures. It is that fixed duration and not a countdown: nothing on this client says when the thing in front of you actually died, so no timer is running and none is claimed. An entry whose recorded duration is zero or missing shows no line at all rather than reading as an instant respawn. "Respawn timers in tooltips" in the settings turns it off.
+
+- The quest log, the quest giver's offer and its turn-in window now all say what a quest pays. Under the rewards it already lists, the experience and any reputation the quest gives are added as their own lines -- reputation losses included, since a few quests cost you standing with someone else. The game itself never tells an addon either number, so both come from the bundled quest data after matching the quest by name: a quest this server has renamed simply shows nothing extra rather than a wrong figure, and the experience shown is the quest's own listed reward rather than what your character would be granted at your level. The lines appear in all three places a quest lists its rewards, so you can see what a quest is worth before accepting it as well as after. They sit side by side under the reward items, and reputation names the faction it is with -- "Argent Dawn: +75". Seven faction numbers out of the fifty the quest data uses are still shown as the amount alone: the game gives an addon no way to turn a faction number into a name, so the names are carried in the addon's own data, and those seven were left out rather than guessed at. Several quests can share one name -- Executor Zygand in Brill hands out four separate quests all called "At War With The Scarlet Crusade" -- and the name alone cannot say which of them you are being offered, so the window's own story text and objectives are read too and the one they belong to is used. When they still do not settle it, nothing is shown rather than another quest's figures. "Experience and reputation rewards" in the settings turns the whole thing off.
+
+- The same row of language flags now sits in the top-right corner of both quest-giver windows, so a quest can be read in your own language before accepting it and when turning it in, not only in the quest log. It works exactly as it does there -- one flag per language that quest is carried in, the lit one is the language it is in now, and the first flag is always the game's own words -- and it changes that one quest everywhere at once. On the completion window it now translates the title, the paragraph, the reward headings, reward item names, and the added experience/reputation labels. The bundled quest data has no translation of the giver's completion speech itself, so the translated view uses that quest's localized description in its place; choosing the game's flag restores the exact completion speech the server sent. A quest the addon cannot pin down gets no flags, the same refusal as everywhere else.
+
+- A row of small flags now sits in the top-right corner of the quest log's right-hand page -- the same row the settings window carries, in the same order and read the same way, only smaller. Clicking one reads that quest in that language: title, objectives and description, without touching the setting that governs every other quest, and without a reload. The lit flag is the language the quest is in; the first flag is always the game's own, so the words the server actually sent are one click away. Only the languages the bundled data actually has for that quest are shown. Only that one quest changes, and it changes everywhere -- the tracker, the map pins and the tooltips all say the same thing about it a moment later. The choice lasts for the session and is forgotten at logout, so nothing has to be undone. A quest the addon could not match, or one with no translation on offer at all, gets no flags at all.
+
+- Fixed the quest log's language flags not being able to go back to the game's own text. Switching a quest between two translations worked, but clicking the game's own flag left the last translation on screen: putting the text back was left to the client, and the call that was asked for only repaints the quest list, not the description beside it. The addon now remembers the exact words it replaced and writes them back itself, so the way back does not depend on the client agreeing to repaint.
+
+- The elite mob alert is now three switches instead of one -- rares, elites and bosses each have their own -- so you can be told about a rare walking past without a boss camp pinging you all afternoon, or the other way round. They sit under the alert distance in settings, and unticking all three is the alert switched off; "/pq rare on" and "/pq rare off" still turn the whole thing on and off at once, and now say which ranks are listening. If you had the alert turned off, it stays off. Ordinary elites are unchanged: they are still shown on the map and never alerted about, because every elite camp in the game counts as one.
+
+- The rare, elite and boss alert window now says how many times you have killed the creature it is announcing -- "Killed: 3" under its name and rank -- and the number goes up while the window is still on screen if you kill it there and then. The count belongs to this character, kept per character exactly like quest completion is, because sharing it account-wide would credit one alt's kills to every other. A defeat is only counted when this character and the living creature were both seen in combat and the creature then died: the client exposes no killing-blow event, so a corpse first targeted after somebody else killed it is not counted.
+
+- Your own arrow at the centre of the minimap is no longer buried under quest markers. Every marker was drawn well above it, so a dot on the spot you are standing on hid the one mark you steer by. Nothing is hidden to fix it -- a dot on your position is still a dot -- only the order changes: the game's arrow is lifted above the markers where the client lets an addon touch it, and otherwise the markers are lowered under it. "Keep the player arrow above minimap markers" in the settings turns it off, and "/pq minimap" says which of the two happened.
+
+- Fixed hovering something the addon has quest progress for showing two tooltips at once -- the game's own, and a second box under it with the extra lines. The addon reprints the creature's own rows inside one combined tooltip, but it only recognised those rows when the name it read back matched the name on the first line, and a name drawn in colour did not match: the colour markup was being compared as if it were part of the name. Anything with a coloured name therefore lost its rows for the whole hover and got the old two-box treatment. Names are now compared without their colouring, and the second box is gone for good rather than fixed: when the game's own lines cannot be read at all, the addon shows nothing extra and leaves the ordinary tooltip alone instead of hanging its own panel beneath it. "/pq tooltip" counts how often that happens.
+
+- Fixed the native tooltip remaining visible behind the combined entity tooltip. Live traces found a 162px native NPC body behind a 136px replacement, then caught a cursor-follow world object switching between two native anchors. NPC replacements now contain the current native body and an owned snapshot of its health bar, so the bar cannot disappear when the native tooltip's parent fades; both owned pieces leave in the same tick. Cursor-follow world objects retain the one native tooltip instead of starting an impossible two-position replacement, while NPC replacements continue following the real cursor throughout their mouse-out hold. The hold defaults to 0.7 seconds and is owned by pandaUI beside its cursor-follow option, with a 0.25-1.00 second slider. PandaQuest reads that value directly, and `/pq tooltip delay <0.25-1>` updates the same value without a reload. The native tooltip root's position, alpha and contents remain untouched.
+
+- Fixed "Current zone only" showing the whole quest log inside a dungeon. The client calls the dungeon the zone, which used to look exactly like standing in a mine, so the tracker fell back to the zone outside the door and listed everything filed under it. A dungeon is now recognized as its own place, and the window narrows to the quests you can actually work on in there -- including the ones the quest log files under a city or another zone, which are found by the creatures they send you to rather than by their heading. Walking back out restores the zone you left.
+
+- Fixed two settings options printed on top of each other -- "Clamp off-view minimap markers to the edge" and "Keep the player arrow above minimap markers" shared one line and were unreadable. The options page now runs five clean two-across rows, every option on its own line, and the second column starts at the same place on all of them instead of one row sitting further left. The room for the extra line comes from the two explanatory lines under "Dots" and "Areas" on the world map section, which repeated what the two words already say.
+
+- Restored Warleader Krazzilak to the Rare/Elite/Boss finder in Tanaris. Its outdoor spawn had been incorrectly promoted from the temporary review list into the bundled dungeon-approach exclusions.
+
+## 0.3.2
+
+- Objective progress can now be reported to your party as "[PQ] Kobold Vermin: 4/8" -- the objective's own name and its counter, tagged so it reads as the addon and not as you typing -- one line each time a counter moves, so a group working the same quests can see each other's progress without asking. A line is only ever sent for a quest at least one other group member actually has: the client itself answers that for every party member, and for a raid, or a party member the client will not answer for, other PandaQuest users in the group fill the gap. Anyone who is neither is left out rather than guessed at, and nothing is said. "Objectives in party chat" in the settings is on by default and turns it off; it is silent while you are solo. "/pq announce" is the same switch plus a report of how sharing is being decided and what has been sent. Only real progress is announced: a counter going up, or an objective with no counter finishing. If the client refuses to let an addon write in chat -- which its own API reference says it will -- the report says so once and then reaches the group's other PandaQuest users directly instead.
+- Added "Completed objectives only" beneath party reporting in settings. With both options enabled, each objective gets its own message when it reaches its target (for example, Prowler 8/8 and Young Forest Bear 5/5); partial progress stays silent.
+- In a party the quest log now reads "[1] [24] Weapons of Choice": how many other members of the group are on that quest, greyed, in front of the quest's own level. The client draws that same count in the row's left gutter, which is exactly where this addon already writes the level, so the two were printed on top of each other. The count is now part of the row's own text, so it cannot overlap the level and cannot drift from it either -- the two are one string. It is the client's own answer about the real party, so a member who does not run this addon counts the same as one who does, and nothing is asked at all while you are solo.
+- Fixed completion-only party reports being discarded when no other member was detected on the same quest, including Okra 3/3 in Westfall Stew. This mode now requires only a group; every-step reports retain their shared-quest filter.
+- Collected-item progress now stops at the required count in addon displays and party messages: 4/3 is shown as 3/3, and further surplus pickups do not trigger another progress report.
+- Quest links inserted into chat by Shift-click now use only the quest name, without the party count or quest level shown in the quest log.
+
+## 0.3.1
+
+- Quests can now be set as followed by clicking their dots or marker on the map, and on the minimap too: the same pin means the same thing on both, so a dot or a "?" around the player follows its quest without opening the map, and a "!" answers shift-click with the same "mark this quest done" list.
+- Followed quests now appear differently on the map, with their quest dots and turn-in position highlighted with a circle. The quest dots carry the same gold outline on the minimap, so the quest you are following is as easy to pick out of the pins around you as it is on the map.
+- Hovering a mob dot with multiple related quests now shows all related quests in the tooltip.
+- Fixed quest level display remaining visible when scrolling the questlog.
+- Fixed the quest list running off the window in pandaUI's modern theme.
+- Quest dot colors are now saved per quest and remain the same after relogging.
+- Hovering any quest dot now highlights the related quest's turn-in position.
+- For quests with multiple unique item collection locations, each dot now disappears when its item is collected.
+
+## 0.3.0
+
+- Hovering anything that belongs to a quest -- an objective dot or area, a "!" or a "?" -- now fades every pin on the map that belongs to a different quest down to a quarter opacity, so a crowded zone answers "which of these is the one I am pointing at" at a glance. Nothing is hidden and no colour moves: the faded half stays readable, it simply stops competing. It applies on the minimap too, and it covers the whole picture rather than only the quest dots -- the NPC finder's service, node and rare pins fade with everything else, while a quest vendor's pin stays bright when the quest you are hovering is the one that wants what it sells. Everything returns to normal the moment the cursor leaves.
+- Made the gold circle around the followed quest's turn-in marker six pixels larger, so it reads as a ring around the "?" rather than a halo sitting on it.
+- Following a new quest now makes that gold circle breathe a few times where the quest hands in, using the same easing as "Show on map", so the destination you just asked for is easy to find among however many other pins are on screen. It settles after three pulses, and redrawing the same followed quest -- changing zone, reopening the map -- leaves it resting. Hovering any quest's objective dot now also marks that quest's own turn-in with the same circle, breathing once, so pointing at where the work is tells you where it ends. The followed quest simply pulses the circle it already has; any other quest is lent one for exactly as long as the cursor stays on it -- letting go removes it and stops the animation on the spot.
+- Fixed repeated quest-change notifications when the quest log contains duplicate titles, such as copies granted for testing. Copies with different completion states or levels could overwrite the same quest record on every poll, repeatedly invalidating the map and navigator. Each title is now reconciled once per scan and appears once in the ordered model; removing a copy refreshes the surviving row without treating it as a newly accepted quest.
+- Fixed the whole game freezing repeatedly after the world map had first been opened. The world-map scene was being rebuilt whenever an objective counter advanced and whenever any kind of item entered or left the bags, even though almost none of those changes could move a quest marker. A busy map could therefore recreate roughly a thousand dots several times a second while the player was fighting or looting, while the navigator separately recollected the same hundreds of spawn points once a second forever. Progress-only counter changes no longer invalidate any map scene, bag checks now watch only quest-use items that can affect visible targets, the navigator has no timer-only rebuild, and changes received while the map is closed are combined into one rebuild when it next opens. The existing placement sweep also runs slowly off-screen, and already-hidden pools are no longer walked four times a second.
+- Logging in no longer costs a several-second freeze. Every part of the addon asked to be woken up on a timer, and all of them came due together in the very first frame after the loading screen, so the map, the quest log, the tracker, the bags, the world data index and everything else ran at once -- measured at 3.7 seconds, against a worst frame of a third of a second for the rest of the session. They now start a few at a time over the first fraction of a second instead. Nothing waits any longer than that, nothing runs less often afterwards, and anything that switches on later in the session starts immediately as before.
+- Two quests that send you to the same spawn no longer cost two map dots stacked exactly on top of each other. Only the upper one was ever visible or hoverable, so the lower one was pure weight: Elwynn Forest with twenty quests in the log was drawing 1215 dots on 988 actual places. The dot that survives keeps every quest sharing its spawn in its tooltip, exactly as before, and the quest you are following always keeps its own brighter dot and gold ring rather than losing the spot to whichever quest happens to sit higher in the log.
+- Quest levels no longer vanish from the quest log when you scroll it. The list is a scrolling window over the quest log: the rows themselves never move, and the client refills row 1 from the first quest you can see, row 2 from the second, and so on. Each row also carries a note of which quest it is holding, and that note is only correct while the list sits at the top -- so the addon was reading the level of a quest that was not on the row, noticing the mismatch and leaving every row bare for as long as the list stayed scrolled. Rows are now matched to quests by where the list is scrolled to, with the row's own note as a fallback, and the name written on the row decides between them, so a row can never be given another quest's level. The tracked marker, the followed quest's plaque and shift-click tracking use that same matching, so they follow the right quest in a scrolled list too.
+- The level, the marker and the plaque also come back instantly rather than up to a fifth of a second after the client redraws the list: one row is watched every frame, and any redraw is undone in the same instant it happens.
+- Fixed the followed quest's gold plaque and the tracked quest's accent appearing twice after scrolling the quest log -- once where the quest is now and once where it was. A zone header carries no quest, but the note each row keeps of what it holds is stale as soon as the list scrolls, and a header was being handed whichever quest that stale note named. A header row is now simply a header, and the marks move with their quests.
+- Moved the followed quest's gold plaque one pixel right in pandaUI's modern Quest Log, into the room its list panel keeps beside the names. The native and Classic WoW rows have no such room and keep it where it was.
+- The quest list's scroll bar now sits inside the left panel in pandaUI's modern Quest Log instead of floating past its edge. That panel is deliberately tightened against the quest names, which was right while the list never scrolled; it now keeps exactly as much room as the scroll bar occupies and tightens by whatever is left over, so a log short enough not to scroll still gets the close fit. The detail page on the right moves and resizes to match, so the gap between the two panels and the window's overall width are unchanged.
+- Fixed the quest list running off the bottom of the window in pandaUI's modern Quest Log. That layout fits exactly 23 rows on its page at the stock row height, and this addon makes those rows taller to give the names room to breathe -- which pushed the last two over the Abandon, Share and Exit buttons and off the bottom edge. Rows are now measured against the page they are drawn on rather than counted: any row that ends below it is taken off the page and reached with the scroll bar instead, exactly as the native quest log behaves.
+- Fixed a long quest list running off the bottom of the two-page Quest Log. Once you carried more quests than the left page could hold, the last rows were drawn over the Abandon, Share and Exit buttons and past the edge of the parchment instead of waiting behind the scroll bar. The rows are now spaced by the row height the client actually reports and only as many are shown as end inside the page, so everything past that scrolls on the log's own scroll bar and mouse wheel, exactly as the native quest log does.
+- A container you have already emptied now loses its dot on both maps and stops being a navigator target. "Stones of Binding" was the reported case: the quest sends you to three separate stones in Arathi for three different keys, and all three stayed on the map after the first key was in your bags, so the arrow could still send you back to a stone you had cleared. A creature whose objective was finished already disappeared this way; a container did not, because its quest log line names what is inside it -- "Burning Key: 1/1" -- and never the Stone of West Binding it came out of. That link is now resolved, so each place drops off as its own step is done. A container the bundled data cannot tie to any objective line still stays put, and exploration objectives are unchanged.
+- Hovering an objective dot now describes every quest sharing that spawn, with each quest's name in its own dot colour. Two quests that need the same creature draw their dots on the same points, so one dot covered the other and the tooltip answered for whichever happened to be on top -- a yellow dot reporting the red quest read as one quest having two colours. Goretusk Liver Pie and Westfall Stew, both hunting Westfall's boars, were the reported case. A dot standing on its own is unchanged, and the same cluster-tooltip setting that governs stacked map markers turns this off.
+- A quest now keeps the same dot colour across a reload and a relog. The colour a quest was given held for as long as you stayed logged in, but the palette was dealt out from scratch on every login, so a quest you had been following for days could come back a different colour after a /reload. Each character remembers which colour belongs to which of its own quests, and forgets it when the quest leaves the log so the colours still on screen stay as far apart as the palette allows.
+- One-of-a-kind roaming quest targets now appear as one objective dot with their patrol drawn around it. `Wanted:  "Hogger"` was the reported case: the bundled data stores five samples along Hogger's route, so the guaranteed Huge Gnoll Claw objective looked like five different Hoggers and the spawn-count gate hid his path. The rule applies to every one-result kill or guaranteed drop backed by one patrol, while multi-spawn mobs and uncertain item drops keep their full location cloud.
+- Fixed the navigator sending an unfinished quest to its future turn-in. `Wanted:  "Hogger"` could point at Marshal Dughan in Goldshire instead of Hogger's spawns because the optional in-progress `?` marker was treated as a route candidate. Those markers remain visible map context, but navigation now uses objectives until the quest is complete and only then switches to its turn-in.
+- Quest names in pandaUI's modern Quest Log are coloured by how hard the quest is, the way the stock quest log colours its list: red, orange, yellow, green or grey against your own level. The modern theme painted every row the same colour, so a quest ten levels above you looked exactly like one you had outgrown. The colour is the same one the tracker window and the map already use, so the three cannot disagree, and the classic and standalone logs are untouched.
+- Clicking a followed quest again to hand following back to the nearest node now sticks. The quest you unfollowed came back after a reload or a relog, because the addon wrote down which quest automatic following happened to have landed on and restored it as if you had picked it. Automatic following now remembers only that it is automatic, and finds the nearest node again on login. Unfollowing also drops the quest immediately instead of leaving it marked as followed until the arrow next moved to a different one.
+- The native and Classic WoW quest log now carries the same following integration the modern pandaUI layout had to itself: a persistent Following button beside Show and Track/Untrack in the detail pane, and the authored gold plaque with its quest marker behind the followed quest's row in the list. Both logs list the quest log through the same rows, so the followed quest is marked identically whichever one is on screen. The denser modern row height, the recoloured objective lines and the level under the detail title stay with the modern layout, which is the only one that lays those out -- the native row already carries the level in its own text.
+- Hovering a creature that drops a quest item now shows how often it drops it, in brackets after the objective's counters. The figure is the bundled world data's own recorded chance for that creature, coloured red through green so a rare drop reads as rare before the digits do; anything under a hundredth of a percent is written as "<0.01%" rather than rounded to nothing. A kill objective has no drop rate and is unchanged, and where one name is shared by several creatures with different loot tables the best of them is shown.
+- Imported EQL3's two-page parchment Quest Log into PandaQuest: the native list now expands down the whole left page while the selected quest's stock detail pane remains visible on the right. Its top-left keeps the native Quest Log artwork instead of EQL3's purple book. It activates only without pandaUI or with pandaUI's Classic WoW theme; modern pandaUI themes retain their own two-pane Quest Log.
+- Shifted the extended Quest Log's Share and Exit buttons six pixels left so the footer pair aligns with the parchment artwork.
+- Made the navigator arc a little more opaque and tied the arrow's opacity to alignment: it is fully opaque straight ahead, 45% opaque directly behind, and gains opacity with every rotation step between them.
+- The modern pandaUI quest log now carries the followed quest consistently across both panes: its visible row gets an authored gold plaque behind the quest name plus the same quest marker as the tracker, the detail action row gains a matching persistent Following button beside Show and Track/Untrack, and the selected quest's level sits directly below its title. Followed rows stay quiet, without an extra "Following" label or arrow. That pass was made first for the modern layout; the native and Classic WoW quest logs have since caught up.
+- Quest-log browsing no longer changes the followed quest: only the dedicated Following button does. The modern pandaUI layout also uses a smaller action row, roomier quest rows with separate tracked/followed markers, scrolling reward coins, and green completed objectives.
+- Fixed the modern quest-log Following button periodically flashing its hover treatment: stable polls no longer reanchor or repaint an unchanged button.
+- Hovering a quest in the tracker now enlarges that quest's own objective dots on the minimap, so you can tell at a glance which of the dots around you belong to the row you are looking at. Only the dots already on screen change size; nothing is added, removed or saved, and they return to their configured size as soon as the cursor leaves the row.
+- Tracker quest and objective rows now grow with wrapped text, moving every later row down without overlap, with a 1px gap between consecutive objectives.
+- Halved the navigator's complete on-screen footprint and made its visible dial draggable, with the dropped UIParent-relative position saved across reloads.
+- Fixed the navigator arrow warping instead of turning. The client accepted the documented rotated-texture call but did not draw it as a rigid rotation, so the arrow now uses 64 pre-rotated frames selected in 5.625-degree steps. Four compressed 512×512 atlases give every direction a near-native-resolution 128×128 cell—the earlier 64×64 cells looked pixelated—and use fresh texture paths so `/reload` cannot retain an older decoded image. The arc remains completely still.
+- A quest navigator automatically points to the nearest displayed objective or ready turn-in node for any active quest in the current zone, using the same hidden-quest choices as the maps while leaving future in-progress turn-ins as map context only. It retargets as you move and needs no manually selected main quest. The arrow turns as you turn: pointing up means the node is straight ahead, leaning left means turn left, and pointing down means it is behind you. A centred readout beneath it gives the live distance. It brightens as you close in and breathes gently in the last ten yards, then steps aside once you are standing on the target. A ready turn-in turns the arrow green. The arc behind the arrow is a marker for straight ahead, not a compass -- it never points north and never turns. Two things worth knowing: it follows your CHARACTER, so it drifts while you hold right-mouse to look around, and it only considers nodes in the zone you are standing in, which is the same limit the map dots have. /pq nav reports the chosen node kind and quest and says why the navigator is hidden when it is. The options page can show or hide it, navigatorScale adjusts its size, and dragging the visible dial saves its placement.
+- The world marker that used to point at quests over the 3D world has been retired in favour of the navigator. It could tell you the right direction left and right, but never the right height: this client gives an addon no way to read the camera, and the bundled world data records no altitude for anything, so the marker could only ever sit on a fixed line across the screen. Right sideways and wrong vertically reads as broken rather than half-finished, so it now waits, switched off, for a client that can carry it.
+## 0.2.3
+
+- Fixed "only show quests from the current zone" showing your whole quest log whenever you stood somewhere none of your quests were. The rule that stops the tracker going blank was listing everything as soon as nothing matched, so walking into a capital, crossing a zone or finishing a zone's quests left the window full of quests from everywhere. It now tells the two cases apart: when the zone is one the client or the bundled data can actually name, the filter stands and the window says "No quests in this zone" in a single row; the whole log is listed only when the zone itself could not be identified, which is what that rule was for.
+- An item a quest has you *use* on something is no longer treated as an objective you have to farm, so the quest's real target stops being buried. "Frostmaw" is the case that showed it: the map drew 73 dots in Alterac and 99 in Hillsbrad for the four Mountain Lion species that drop the Fresh Carcass, with Frostmaw's own single summon coordinate lost among them. The map now shows where to get the carcass while you still need one, and once it is in your bags shows only Frostmaw and the cave you place it at. It applies to all 57 quests built this way, "Marla's Last Wish" included, and a quest that genuinely counts the item -- its log line still unfinished -- keeps showing you where to get the rest.
+- Objective rows in the tracker now draw a progress bar under any objective that counts something, alongside the numbers. A checkbox in the tracker settings turns them off.
+- "Show" in the quest log, and Ctrl+click in the tracker, now open the map on the zone you actually have to go to instead of the one you are standing in. For a finished quest that is where it is handed in, for an unfinished one where its objectives are -- so a quest looted in Ashenvale and handed in at Sun Rock Retreat opens the Stonetalon Mountains, crossing to the other continent when it has to. The map is put back on your own zone once you travel, or shortly after, because the minimap pins, the quest arrow and the rare alert all need it there; a zone you pick yourself from the map's own dropdown is left alone. If the client will not show the zone at all, it is still named in chat the way it was before.
+- The quest tracker now marks a completed quest with the complete-quest icon in front of its name instead of turning the title white, and sinks it below the quests you still have to finish in its zone. The title keeps its usual level-difficulty colour. This updates the instant a quest completes, and again on login or /reload.
+- Fixed hovering a quest creature showing two tooltips at once: the client's own tooltip and, under it, a second panel with the quest progress. The creature's name, level and classification are now printed inside the single tooltip that carries the progress, the way a one-line world object already was.
+- Patrol routes on the world map for one-of-a-kind quest targets, and on hover for service, rare and quest-vendor pins.
+- Fixed the quest tracker emptying itself whenever you walked indoors. This client answers with the room you are standing in -- "Echo Ridge Mine", "Brill Town Hall" -- through both of its zone calls, which matched no quest and hid the whole log until you stepped back outside. The tracker now recognises a name that is not one of the zones the client itself lists, and recovers the zone the mine or building sits in: from the bundled area table where it knows a parent, otherwise from the zone you walked in from, otherwise from the zone the world map is showing. It never filters on a name it cannot place. The tracker also refuses the outcome outright now, not just the causes it knows about: if "only show quests from the current zone" would hide every quest in your log, the filter is dropped for that refresh and the whole log is listed. A filter that is too strict can narrow the window; it can no longer empty it, whatever the client answers when you step through a door.
+- Quests filed in the log under a subzone of where you are standing -- "Northshire Valley" while you are in Elwynn Forest -- now stay in the tracker's current-zone view instead of depending on the map having something to draw for them.
+- Fixed right-click doing nothing on a quest whose objectives were folded automatically because it had no progress yet. Right-click now always toggles the row you are looking at, and no fold outlives the quest's next update: killing a mob, looting a quest item or finishing an objective reopens that quest so you see what moved. A quest that already has progress is never left folded when you log in either.
+- Bundled 75 reviewed Rare/Elite/Boss creature-zone exclusions across 16 outdoor zones, suppressing dungeon-approach records from both maps and proximity alerts.
+- Proximity alerts are now disabled throughout Stormwind, Ironforge, Darnassus, Orgrimmar, Thunder Bluff and Undercity.
+- The option that hid quests until progress started now defaults on, keeps their titles visible and automatically folds only their objectives. Progress unfolds them again unless the player folded the quest manually.
+- The NPC finder can now draw dungeon and raid entrances from the bundled instance database on both maps, using a distinct icon for each type.
+- "Only show quests from the current zone" now keeps a quest whose objectives are here even when the quest log files it under another zone. The tracker asks the map: if a dot, a turn-in marker or a vendor pin for that quest would be drawn on the zone you are standing in, the quest stays in the window.
+- Hovering any minimap quest dot, quest marker, service/node marker or quest vendor now opens its tooltip, matching pfQuest's minimap behavior.
+- Fixed the quest tracker's text and controls drawing over unit frames or the minimap when the tracker was placed beneath them.
+- Added a disabled-by-default "Show low-level quests" setting. When enabled, offerable grey/trivial quests appear on the world map and minimap with the low-level quest-giver icon; CLUCK! remains hidden because its chicken spawn cloud is map clutter.
+- Exploration quests now show their destination on the world map and minimap. "The Jasperlode Mine" now points to both recorded mine-entry exploration locations instead of displaying no objective dots.
+- Finished creature objectives now remove their own map and minimap dots while the quest remains in progress. For example, completing the Young Forest Bear objective in "Protect the Frontier" leaves only the Prowler locations.
+- Rare, elite and boss pins, quest giver markers and turn-in markers now ease smoothly into and out of their enlarged hover size.
+- A card and a sound now warn you when you come within 150 yards of a rare, rare elite or boss creature's known spawn, naming it, its rank, its level and how far away it is. This is proximity to a spawn point in the world data, not a live sighting: this client gives an addon no way to see the creatures around you. It covers the same creatures the NPC finder's rare-mob layer draws -- 409 curated rares and rare elites -- plus open-world bosses, and one checkbox turns the whole thing on or off. Ordinary elites are not included: they are every elite camp in the game plus parked NPCs like the level 61 Darkmoon Faire barker standing in Goldshire. /pq rare sets the range and auditions the alert sound.
+- City guards, faction officers and leaders no longer appear as elites on the map: Orgrimmar alone was drawing 33 of them, Thrall and Vol'jin included. Anything the world data marks as belonging to a player faction is treated as an NPC rather than a mob, unless it is a known rare.
+- The Darkmoon Faire's staff no longer appears either, so the level 61 barker standing in Goldshire stops showing up in a starter zone.
+- The rare/elite alert card can be dragged anywhere on the screen by grabbing it, and stays where you put it. /pq rare reset moves it back under the top edge.
+- The proximity alert now opens with "A rare creature is nearby" above the name, so it says what happened before it says who, and the distance on it counts down live as you walk instead of freezing at the value it had when it appeared.
+- Hovering a rare, elite or boss pin on the map now grows it 1.5x, the same way a quest giver or turn-in marker does.
+- Each rare, elite or boss is drawn once per zone instead of once per recorded spawn point: Hogger has five coordinates in Elwynn Forest and took five pins. The pin sits on whichever of his real spawns is closest to the middle of them all, and its tooltip names the creature's own classification -- Rare, Rare Elite, Elite or Boss -- rather than the name of the filter row.
+- Dungeon interiors no longer show up as a crowd of elites outside the entrance. Wailing Caverns put nine elite pins on its Barrens door and Maraudon thirteen on its Desolace one: those creatures are inside the instance and reach the outdoor map only because the world data records the spawns standing in the entrance cave. An ordinary elite whose pin lands within 250 yards of a dungeon or raid entrance is no longer drawn, on the map or the minimap. Rares, rare elites and bosses still are, wherever they happen to stand.
+- The NPC finder's "Rare Mobs" row is now "Rare/Elite/Boss" and shows every ranked creature in the zone, not just the 409 curated rares: elites and world bosses are drawn too, each pin wearing one of three icons for its rank.
+- The dragon frames around rare, elite and boss pins are replaced by stars: a silver star for a rare, a gold one for a rare elite or elite, and a red one for a boss, so a pin's rank reads at a glance without the frame swallowing the icon underneath.
+- The quest log now shows each quest's level in brackets before its name, the way the tracker window already did.
+- Fixed standalone quest-log tracking marks jumping to the end of differently sized quest titles after Shift-click. PandaQuest now owns a fixed accent on each row and restores level prefixes in the same click.
+- Quests that ask you to buy something now show the traders selling it, on the world map and the minimap, with the NPC finder's vendor icon and a tooltip naming the quest, the item and your progress. The points disappear once you have the item; /pq map vendors off turns them off.
+- A completed quest now takes a single green line in the tracker window: its "Ready to turn in" line and its finished objectives are no longer listed under it.
+- Fixed a Lua error thrown by the client's own tracked-objectives panel ("attempt to concatenate local 'text'" in QuestLogFrame.lua) on quests whose objectives that panel cannot read. Such a quest is kept out of the client's five watch slots and still tracks normally in PandaQuest's own tracker window.
+- Translated the whole interface into French, Russian and Simplified Chinese: the settings page, the tracker, every map, minimap and NPC tooltip, the quest log buttons and all /pq output.
+- French is written without accents ("quete", not the accented spelling), the way pandaUI writes it: the client's font draws accented letters as blank boxes, and no font this addon could ship changes that.
+- Pick the language with the flag row in the top-right of the settings window. With pandaUI installed the language follows the one set there instead, and no second selector is shown.
+- Quest markers and dots now follow the map you have open, not the zone you are standing in: open Westfall's map from Elwynn Forest and Westfall's quest points are drawn. The minimap markers and the HUD waypoint still follow your own zone, which is the only one they can measure from.
+- Fixed the map and minimap showing nothing at all in Westfall, whose name is carried by two different areas in the world data.
+- Use different colors for map points from different quests.
+- Show a path for quest-giver NPCs with patrol waypoints.
+- Add nodes such as treasures, mining nodes, rares, and more.
+- Automatically track accepted quests and add them to the tracker window.
+- Add icons to the NPC Finder instead of colored squares.
+- Fixed accepted quests sometimes not disappearing from the map.
+- Turn the "?" map marker orange when a quest is complete.
+- Make map quest markers smaller and add an option to choose their size.
+- Reduce the opacity of other markers when hovering over a quest on the map.
+- Hovering a quest on the map now also enlarges the marker it is linked to, the same way hovering that marker does, so the point where it is handed in stands out among the markers left lit.
+- Improved filtering to prevent some quests from being duplicated on the map due to the database.
+- Remove arrow scrolling from the tracker windows.
+- Truncate quest names when they do not fit the window now improved, no more blank space.
+- Remove the limit on the number of map dots displayed.
+- Quests given by NPCs from the other faction no longer display on the map.
+- Fixed the limit of 5 in tracker windows; now unlimited.
+- Improved world-map frame rate with many quest points on screen.
+- Fixed the map showing nothing while standing inside a building, such as Brill Town Hall.
+- Minimap markers are now withheld indoors, where this client gives no way to establish the map scale, instead of drifting along with the player.
+- Added /pq minimap span to dial in the minimap scale for a zoom step, and /pq minimap indoors on|off.
+
+## 0.0.2
+
+- Added RU and CN client support.
+- Added ES client support.
+- Added a custom quest tracker, no longer limited to the native 5-quest watch list.
+- Fixed quests not always appearing when opening the map.
+- Improved quest tracking with roughly 80% fewer ambiguously flagged quests.
+- Added a settings window.
+- Added a PQ settings menu, standalone and pandaUI-compatible.
+- Added an option to show quest objectives as an area or a point.
+- Added a tooltip listing every marker when two or more collide on the map, with an option to disable it.
+- Added an experimental pfQuest import for already-completed quests.
+- Added an NPC tracker.
+- Added trainers as trackable NPCs.
+- Added trainers and waypoint patrols extracted from vMangos.
+
+## 0.0.1
+
+- Initial implementation predates the OctoWoW port; current support is OctoWoW only.
+- Added a movable quest tracker window listing every quest in the log, with objectives and progress.
+- Added a maximum height for the quest tracker window; a shorter log now shrinks it to fit.
+- Added a live background-opacity slider for the quest tracker window.
+- Fixed the quest tracker not scrolling to its last lines when limited by height.
+- Fixed the client's own quest watch panel reappearing whenever a quest was tracked or untracked.
+- Added Show and Track/Untrack buttons above the quest log's description pane.
+- Added persistent quest tracking across interface reloads.
+- Added world-map objective areas, quest-giver markers and turn-in markers.
+- Added minimap pins for nearby quest objectives and quest givers.
+- Added a movable HUD selector for service NPCs and objects on the world map and minimap,
+  with automatic current-class filtering for class trainers.
+- Added a second world-map presentation for quest objectives: one dot per target position,
+  in the same style as the minimap pins, now the default. The shaded blue areas are still
+  there -- pick either one in the options window, or with `/pq map dots|areas`.
+- Added live quest names and objective progress to creature tooltips.
+- Added detailed world-map tooltips for quests and quest givers.
+- Added clustered world-map tooltips: hovering markers that sit too close together to be
+  picked apart now describes every one of them in a single tooltip. Can be turned off in
+  the options window.
+- Added quest eligibility filtering for level, race, class and seasonal requirements.
+- Added support for item-use quest objectives.
+- Added optional quest-creature marks where the client permits them.
+- Fixed every quest losing its map pins, minimap pins and waypoint on setups where the
+  quest log hands back titles with the level prefixed to them (`[24] Weapons of Choice`),
+  reported on a Russian client.
+- Added an options window, opened with `/pq config` or a settings button beside the minimap.
+  When pandaUI is installed the same page is drawn inside its settings window instead, and the
+  button is left to pandaUI's own; both addons stay usable on their own.
+- Added an import for pfQuest's completed-quest history. This client cannot report which
+  quests a character already finished, so a fresh install shows a quest-giver marker for every
+  quest they completed before installing the addon. pfQuest kept that record, and it can now be
+  copied in: press **Import from pfQuest** under Quest history in the options window, or use
+  `/pq pfquest`. `/pq pfquest undo` takes the import back without touching completions the
+  addon worked out for itself.
+- Made that import work for the normal case, where pfQuest has already been disabled. Its
+  saved history is only in memory while it is enabled, so the button switches pfQuest on,
+  asks for one `/reload`, imports by itself on the next load, and switches pfQuest back off.
+  It is put back even if the import finds nothing or the history never appears.
+- Fixed the quest completion record being shared by every character on the account. It is now
+  stored per character, which is what a completed quest actually is. An existing record is
+  inherited once by each character rather than being lost.
+- Fixed the quest completion record silently refusing entries past the 250th, which a
+  long-lived character reaches on their own.
+- Added `/pq` commands for controls and diagnostics.

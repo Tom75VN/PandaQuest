@@ -1,0 +1,7 @@
+AGENTS.md
+CLAUDE.md
+.claude/
+docs/*
+!docs/logo.webp
+__pycache__/
+*.pyc
