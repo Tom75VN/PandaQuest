@@ -95,9 +95,6 @@ local HELP_TAIL_KEYS = {
     "CMD_HELP_HIDDEN",
     "CMD_HELP_RESETMARKED",
     "CMD_HELP_RESETMARKED_ALL",
-    "CMD_HELP_PFQUEST",
-    "CMD_HELP_PFQUEST_IMPORT",
-    "CMD_HELP_PFQUEST_UNDO",
     "CMD_HELP_RARE",
     "CMD_HELP_RARE_ONOFF",
     "CMD_HELP_RARE_RANGE",
@@ -1280,76 +1277,6 @@ local function ResetMarkedQuests(target)
     MarkMapDirty()
 end
 
--- pfQuest history import ---------------------------------------------------------
---
--- The same three actions the options page offers, for a player who would
--- rather not open a window -- and the only place the per-quest detail of an
--- import is ever printed. Quest/PfQuestImport.lua does the work; this only
--- reports it.
-
-local function ImportPfQuestHistory(argument)
-    local importer = PQ:GetModule("PfQuestImport")
-    if not importer then
-        Line(PQ.L("CMD_MODULE_MISSING_PFQUEST"))
-        return
-    end
-
-    local action = string.lower(PQ.Trim(argument) or "")
-
-    if action == "undo" then
-        local total = importer:Undo()
-        if total == 0 then
-            Line(PQ.L("CMD_PFQUEST_UNDO_NOTHING"))
-        else
-            Line(PQ.LN("CMD_PFQUEST_UNDO_DONE", total))
-            Line("  " .. PQ.L("CMD_PFQUEST_UNDO_LEFT_ALONE"))
-        end
-        return
-    end
-
-    if action ~= "" and action ~= "import" then
-        Line(PQ.L("CMD_PFQUEST_UNKNOWN_OPTION", action))
-        return
-    end
-
-    if action == "" then
-        Line(importer:Describe())
-        local state = importer:GetState().state
-        if state == "ready" then
-            Line("  " .. PQ.L("CMD_PFQUEST_HINT_READY"))
-        elseif state == "disabled" or state == "unavailable" then
-            Line("  " .. PQ.L("CMD_PFQUEST_HINT_DISABLED_1"))
-            Line("  " .. PQ.L("CMD_PFQUEST_HINT_DISABLED_2"))
-        elseif state == "pending" then
-            Line("  " .. PQ.L("CMD_PFQUEST_HINT_PENDING"))
-        end
-        return
-    end
-
-    -- Exactly what the options-page button does, including the enable-and-ask
-    -- path when pfQuest is installed but switched off. PfQuestImport:Press
-    -- prints the headline; the detail below is what the command adds over the
-    -- button.
-    local before = importer:GetState().state
-    importer:Press()
-    if before ~= "ready" then
-        return
-    end
-
-    local report = importer:Scan()
-    if report.alreadyDone > 0 then
-        Line("  " .. PQ.LN("CMD_PFQUEST_ALREADY_RECORDED", report.alreadyDone))
-    end
-    local skipped = report.unknown + report.unmatched + report.ambiguous
-    if skipped > 0 then
-        Line("  " .. PQ.LN("CMD_PFQUEST_SKIPPED", skipped))
-    end
-    if report.waiting > 0 then
-        Line("  " .. PQ.LN("CMD_PFQUEST_WAITING", report.waiting))
-    end
-    Line("  " .. PQ.L("CMD_PFQUEST_UNDO_HINT"))
-end
-
 -- Quest tracker window -----------------------------------------------------------
 
 local function ShowTracker(argument)
@@ -2017,8 +1944,6 @@ local function Handler(message)
         ShowHiddenQuests()
     elseif command == "resetmarked" then
         ResetMarkedQuests(target)
-    elseif command == "pfquest" then
-        ImportPfQuestHistory(target)
     elseif command == "rare" or command == "rares" then
         ShowRareAlert(target)
     elseif command == "announce" then

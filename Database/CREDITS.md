@@ -10,6 +10,11 @@ pfQuest. The Turtle WoW content is packaged by pfQuest-turtle.
 - pfQuest — Eric Mauser / Shagu — MIT License
 - VMaNGOS — world database source used by pfQuest
 - pfQuest-turtle 1.0.38 — Rivi — MIT License (pfQuest's), https://github.com/rivi-s/pfQuest-turtle
+- Turtle WoW server database — the Turtle WoW server SQL dumps
+  (https://github.com/Penqle/tortoise-wow) as compiled by tortoise-db-viewer
+  (Xian55, https://github.com/Xian55/tortoise-db-viewer), build 2026-10-25.
+  Used only to fill gaps (missing creatures, spawns, ranks, service NPCs and
+  trainers); see "Turtle WoW server-database fill" below.
 
 ## How the files are built
 
@@ -39,6 +44,15 @@ zhTW tables are not shipped. A translated row is kept only while it still
 translates the current English row; every name or text without one is read from
 enUS, row by row. pfQuest-turtle ships no French text, so Turtle quests, NPCs,
 objects, items and zones have no French row.
+
+## Turtle WoW server-database fill
+
+After the merge, `tools/turtle_server_db.py` adds what the pfQuest data still
+lacks from the Turtle WoW server database above: spawned creatures with no
+record, coordinates, missing ranks and levels, service NPCs (`meta`) by their
+server NPC flags, and Turtle trainers (classified from the spells they teach).
+It never changes or removes an existing value. Faction tokens of the added
+creatures come from the OctoWoW client's own `FactionTemplate.dbc`.
 
 ## VMaNGOS trainer and patrol additions
 

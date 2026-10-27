@@ -142,6 +142,16 @@ function Client.Now()
     return nil
 end
 
+-- Wall-clock seconds survive a reload, unlike GetTime's session uptime. The
+-- completed-quest server query stores this only as display metadata.
+function Client.EpochTime()
+    local ok, value = Call0("time")
+    if ok and type(value) == "number" then
+        return value
+    end
+    return nil
+end
+
 -- Events --------------------------------------------------------------------
 -- No quest-related event has any record in the runtime compatibility database
 -- and the client's own API reference does not document event names at all.
@@ -8722,6 +8732,86 @@ do
         return x, y, true
     end
 
+    -- The same clamp as KeepFrameOnScreen, worked out from the stored anchor
+    -- and the frame's size alone: no edge is read and nothing is applied, so
+    -- it is exact whatever the frame's last drawn position was. Returns the
+    -- on-screen offsets and whether they differ. `ratio` is the frame's scale
+    -- relative to UIParent; omitted, it is read (Client.GetLayoutRatio).
+    -- Used when the UI scale changes: the caller applies the result without
+    -- storing it, so a smaller scale gives the saved placement back (pandaUI's
+    -- U.ClampPositionToScreen works the same way).
+    function Client.ClampAnchorToScreen(frame, point, relativePoint, offsetX, offsetY, ratio)
+        if type(point) ~= "string" or type(offsetX) ~= "number"
+            or type(offsetY) ~= "number" then
+            return offsetX, offsetY, false
+        end
+        relativePoint = type(relativePoint) == "string" and relativePoint or point
+        local width = Client.GetObjectWidth(frame)
+        local height = Client.GetObjectHeight(frame)
+        local parentWidth, parentHeight = Client.GetUIParentLayoutSize()
+        if not width or not height or width <= 0 or height <= 0
+            or not parentWidth or not parentHeight then
+            return offsetX, offsetY, false
+        end
+        if type(ratio) ~= "number" or ratio <= 0 then
+            ratio = Client.GetLayoutRatio(frame)
+        end
+        parentWidth, parentHeight = parentWidth / ratio, parentHeight / ratio
+        local function Factor(name, low, high)
+            if string.find(name, low, 1, true) then return 0 end
+            if string.find(name, high, 1, true) then return 1 end
+            return 0.5
+        end
+        local left = parentWidth * Factor(relativePoint, "LEFT", "RIGHT") + offsetX
+            - width * Factor(point, "LEFT", "RIGHT")
+        local bottom = parentHeight * Factor(relativePoint, "BOTTOM", "TOP") + offsetY
+            - height * Factor(point, "BOTTOM", "TOP")
+        local insetLeft, insetRight, insetTop, insetBottom = ScreenInsets(frame)
+        left = left + insetLeft
+        bottom = bottom + insetBottom
+        width = width - insetLeft - insetRight
+        height = height - insetTop - insetBottom
+        if width <= 0 or height <= 0 then
+            return offsetX, offsetY, false
+        end
+        local dx, dy = 0, 0
+        if width >= parentWidth or left < 0 then
+            dx = -left
+        elseif left + width > parentWidth then
+            dx = parentWidth - (left + width)
+        end
+        if height >= parentHeight or bottom + height > parentHeight then
+            dy = parentHeight - (bottom + height)
+        elseif bottom < 0 then
+            dy = -bottom
+        end
+        if math.abs(dx) < 0.5 and math.abs(dy) < 0.5 then
+            return offsetX, offsetY, false
+        end
+        return offsetX + dx, offsetY + dy, true
+    end
+
+    -- True once UIParent's effective scale or layout size differs from what
+    -- `state` (a caller-owned table) last saw: a UI-scale or resolution
+    -- change. The first call only records. UI_SCALE_CHANGED is not on this
+    -- client (knowledge.json / layout.hud_movers_offscreen_after_ui_scale_increase).
+    function Client.ScreenLayoutChanged(state)
+        local uiParent = ResolveObject("UIParent")
+        local scale = uiParent and ReadObjectMethod(uiParent, "GetEffectiveScale")
+        local width, height = Client.GetUIParentLayoutSize()
+        if type(state) ~= "table" or type(scale) ~= "number" or not width then
+            return false
+        end
+        if state.scale and math.abs(scale - state.scale) <= 0.001
+            and math.abs(width - state.width) <= 0.5
+            and math.abs(height - state.height) <= 0.5 then
+            return false
+        end
+        local first = not state.scale
+        state.scale, state.width, state.height = scale, width, height
+        return not first
+    end
+
     function Client.GetFrameAnchor(frame)
         if not frame or type(frame.GetPoint) ~= "function" then
             return nil
@@ -11486,6 +11576,25 @@ function QuestLogRewardRows.PlaceMoneyItems(label, row, below)
         -offset)
 end
 
+-- Public ownership check for an optional quest-log host. True only while the
+-- replacement row really draws, so another addon may retain its fallback if
+-- this row is disabled, absent, or failed to build.
+function Client.IsQuestLogRewardMoneyReplacementActive()
+    local native = ResolveObject("QuestLogMoneyFrame")
+    local row = ResolveObject(QuestLogRewardRows.surfaces.log.moneyRow)
+    return native and native.pandaQuestMoneyReplaced == true
+        and row and Client.IsObjectShown(row) or false
+end
+
+function QuestLogRewardRows.RefreshPandaUIMoney()
+    local pandaUI = ResolveObject("PandaUI")
+    local refresh = type(pandaUI) == "table"
+        and pandaUI.ModernWowQuestLogMoneyRefresh or nil
+    if type(refresh) == "function" then
+        pcall(refresh)
+    end
+end
+
 -- replace=false hands the native frame back untouched; replace=true hides it
 -- and draws `copper` (nil or 0 hides the row: no money on this quest).
 function Client.SetQuestLogRewardMoney(replace, copper)
@@ -11528,6 +11637,7 @@ function Client.SetQuestLogRewardMoney(replace, copper)
             QuestLogRewardRows.PlaceMoneyItems(label, row, false)
             Client.UpdateScrollChildRect(ResolveObject("QuestLogDetailScrollFrame"))
         end
+        QuestLogRewardRows.RefreshPandaUIMoney()
         return false
     end
 
@@ -11564,6 +11674,7 @@ function Client.SetQuestLogRewardMoney(replace, copper)
     if changed then
         Client.UpdateScrollChildRect(ResolveObject("QuestLogDetailScrollFrame"))
     end
+    QuestLogRewardRows.RefreshPandaUIMoney()
     return true
 end
 
@@ -13205,6 +13316,26 @@ function Client.SetButtonLabel(button, text, red, green, blue)
         pcall(label.SetTextColor, label, red, green, blue)
     end
     return true
+end
+
+function Client.SetButtonEnabled(button, enabled)
+    if not button then
+        return false
+    end
+    local method = enabled and button.Enable or button.Disable
+    if type(method) ~= "function" then
+        return false
+    end
+    local ok = pcall(method, button)
+    local label = button.pandaQuestLabel
+    if label and type(label.SetTextColor) == "function" then
+        if enabled then
+            pcall(label.SetTextColor, label, 1, 1, 1)
+        else
+            pcall(label.SetTextColor, label, 0.5, 0.5, 0.5)
+        end
+    end
+    return ok and true or false
 end
 
 function Client.SetObjectScript(object, scriptType, handler)
@@ -15682,74 +15813,9 @@ function Client.ClearSettingsEditFocus(control)
     return pcall(editBox.ClearFocus, editBox) and true or false
 end
 
--- Addon registry ------------------------------------------------------------
---
--- Reading, and changing, whether ANOTHER addon is enabled. Needed by exactly
--- one caller: Quest/PfQuestImport.lua, which cannot read pfQuest's saved quest
--- history unless pfQuest is enabled, and most players disable pfQuest the day
--- they install this addon.
---
--- OctoWoW's stock 1.12 API exposes enabled state as GetAddOnInfo's fourth
--- return. GetAddOnEnableState and SaveAddOns do not exist here. EnableAddOn and
--- DisableAddOn select the state for the next UI load; they do not load or
--- unload addon files in the current session, so the player still has to reload.
-
-local function AddOnFolder(name)
-    local ok, folder = Call1("GetAddOnInfo", name)
-    if not ok or type(folder) ~= "string" or folder == "" then
-        return nil
-    end
-    return folder
-end
-
--- Whether the addon exists in the registry at all, enabled or not.
-function Client.IsAddOnInstalled(name)
-    if type(name) ~= "string" or name == "" then
-        return false
-    end
-    return AddOnFolder(name) ~= nil
-end
-
--- Whether the addon's files are in memory NOW. The only question with a
--- definite answer this session -- enabled state describes the next load.
-function Client.IsAddOnLoaded(name)
-    if type(name) ~= "string" or name == "" then
-        return false
-    end
-    local ok, loaded = Call1("IsAddOnLoaded", name)
-    if not ok then
-        return nil
-    end
-    return loaded and true or false
-end
-
--- Whether the addon is enabled for the next load. nil when GetAddOnInfo is
--- unavailable, which callers must not read as "disabled".
-function Client.IsAddOnEnabled(name)
-    if type(name) ~= "string" or name == "" then
-        return nil
-    end
-    local ok, folder, title, notes, enabled = Call1("GetAddOnInfo", name)
-    if not ok or type(folder) ~= "string" then
-        return nil
-    end
-    return enabled and true or false
-end
-
--- Selects another addon's state for the next UI load. The guarded stock call
--- has no useful return value, so pcall success is the only offline result; the
--- importer still waits for the next load before looking for saved variables.
-function Client.SetAddOnEnabled(name, enabled)
-    if type(name) ~= "string" or name == "" then
-        return false
-    end
-    local ok = Call1(enabled and "EnableAddOn" or "DisableAddOn", name)
-    return ok and true or false
-end
-
 -- Rewrites a body line built by Client.CreateSettingsBody. The settings page is
 -- built once per host and then kept, so a line that reports live state -- how
--- many quests an import would bring in, say -- has to be updated in place.
+-- a server query's progress, say -- has to be updated in place.
 -- Rebuilding it would orphan the region the host is already showing and hiding
 -- by hand.
 function Client.SetSettingsBodyText(label, text)
@@ -15758,6 +15824,117 @@ function Client.SetSettingsBodyText(label, text)
     end
     local ok = Client.SetFittedText(label, type(text) == "string" and text or "")
     return ok and true or false
+end
+
+-- Spinner and progress bar used by the completed-quest server query. The
+-- dedicated sync icon uses the navigator's verified 64-frame atlas technique;
+-- native texture rotation distorted the art on this client.
+function Client.CreateSettingsQueryActivity(parent, name, offsetX, offsetY, width)
+    local create = Resolve("CreateFrame")
+    if not create or not parent or type(name) ~= "string" then
+        return nil
+    end
+    local ok, frame = pcall(create, "Frame", name, parent)
+    if not ok or not frame then
+        return nil
+    end
+    Client.SetObjectSize(frame, width, 22)
+    pcall(frame.SetPoint, frame, "TOPLEFT", parent, "TOPLEFT",
+        type(offsetX) == "number" and offsetX or 0,
+        type(offsetY) == "number" and offsetY or 0)
+
+    local arrow
+    if type(frame.CreateTexture) == "function" then
+        local arrowOk
+        arrowOk, arrow = pcall(frame.CreateTexture, frame, nil, "ARTWORK")
+        if not arrowOk then arrow = nil end
+    end
+    if arrow then
+        Client.SetObjectSize(arrow, 20, 20)
+        pcall(arrow.SetPoint, arrow, "LEFT", frame, "LEFT", 0, 0)
+        frame.pandaQuestArrow = arrow
+        frame.pandaQuestArrowTexturePrefix =
+            "Interface\\AddOns\\pandaQuest\\media\\Textures\\Settings\\loading-query-frames"
+        Client.SetNavigatorArrowAngle(frame, 0)
+        Client.HideObject(arrow)
+    end
+
+    local barOk, bar = pcall(create, "StatusBar", nil, frame)
+    if not barOk then bar = nil end
+    local background
+    if bar then
+        Client.SetObjectSize(bar, width - 30, 10)
+        pcall(bar.SetPoint, bar, "LEFT", frame, "LEFT", 30, 0)
+        if type(bar.SetMinMaxValues) == "function" then
+            pcall(bar.SetMinMaxValues, bar, 0, 100)
+        end
+        if type(bar.SetStatusBarTexture) == "function" then
+            pcall(bar.SetStatusBarTexture, bar, WORLD_MAP_PIN_TEXTURE)
+        end
+        if type(bar.SetStatusBarColor) == "function" then
+            pcall(bar.SetStatusBarColor, bar,
+                PQ.colors.accent[1], PQ.colors.accent[2], PQ.colors.accent[3], 1)
+        end
+        if type(bar.SetValue) == "function" then
+            pcall(bar.SetValue, bar, 0)
+        end
+        background = CreateSolid(frame, "BACKGROUND",
+            FLAT_BORDER[1], FLAT_BORDER[2], FLAT_BORDER[3], 0.55)
+        if background then
+            Client.SetObjectSize(background, width - 30, 10)
+            pcall(background.SetPoint, background, "LEFT", frame, "LEFT", 30, 0)
+        end
+    end
+
+    frame.pandaQuestProgressBar = bar
+    frame.pandaQuestProgressValue = 0
+    local parts = { frame }
+    if arrow then table.insert(parts, arrow) end
+    if bar then table.insert(parts, bar) end
+    if background then table.insert(parts, background) end
+    local control = { frame = frame, arrow = arrow, bar = bar,
+        background = background, puiParts = parts, shown = true, running = false }
+    control.puiSetShown = function(shown)
+        control.shown = shown and true or false
+        local index = 1
+        while index <= table.getn(parts) do
+            local part = parts[index]
+            if part ~= arrow or (control.running and control.shown) then
+                if control.shown then Client.ShowObject(part) else Client.HideObject(part) end
+            else
+                Client.HideObject(part)
+            end
+            index = index + 1
+        end
+    end
+    return control
+end
+
+function Client.SetSettingsQueryActivity(control, running, progress, angle)
+    local frame = control and control.frame
+    if not frame then
+        return false
+    end
+    local value = type(progress) == "number" and progress or 0
+    if value < 0 then value = 0 end
+    if value > 100 then value = 100 end
+    local bar = control.bar
+    if bar and frame.pandaQuestProgressValue ~= value
+        and type(bar.SetValue) == "function" then
+        if pcall(bar.SetValue, bar, value) then
+            frame.pandaQuestProgressValue = value
+        end
+    end
+    control.running = running and true or false
+    if control.arrow then
+        if control.running and control.shown ~= false then
+            Client.SetNavigatorArrowAngle(frame, type(angle) == "number" and angle or 0)
+            Client.ShowObject(control.arrow)
+        else
+            Client.HideObject(control.arrow)
+        end
+    end
+    return true
 end
 
 -- An action button on the settings page: the same flat chrome as the quest
@@ -17742,7 +17919,8 @@ function Client.SetNavigatorArrowAngle(frame, angle)
     local ok = true
     if frame.pandaQuestArrowAtlas ~= atlas then
         ok = pcall(texture.SetTexture, texture,
-            Client.NAVIGATOR_ARROW_TEXTURE_PREFIX .. tostring(atlas))
+            (frame.pandaQuestArrowTexturePrefix
+                or Client.NAVIGATOR_ARROW_TEXTURE_PREFIX) .. tostring(atlas))
         if ok then
             frame.pandaQuestArrowAtlas = atlas
         end
@@ -18119,7 +18297,10 @@ end
 -- Places the navigator at its saved UIParent-relative anchor and applies the
 -- complete-tree scale before it is shown. Returns true plus the offsets it
 -- ended at and whether the screen guard had to move it.
-function Client.PositionNavigator(frame, offsetX, offsetY, scale, point, relativePoint)
+-- `followScreen`: the UI scale or resolution changed since the anchor was
+-- stored (Client.ScreenLayoutChanged). The anchor is then clamped to the
+-- current screen without being handed back, so a smaller scale restores it.
+function Client.PositionNavigator(frame, offsetX, offsetY, scale, point, relativePoint, followScreen)
     if not frame or type(frame.SetPoint) ~= "function" then
         return false
     end
@@ -18137,6 +18318,12 @@ function Client.PositionNavigator(frame, offsetX, offsetY, scale, point, relativ
     relativePoint = type(relativePoint) == "string" and relativePoint or "CENTER"
     offsetX = type(offsetX) == "number" and offsetX or 0
     offsetY = type(offsetY) == "number" and offsetY or 0
+    -- The scale was just set, so the ratio is read live. KeepFrameOnScreen
+    -- below then finds the dial on screen and reports nothing to store.
+    if followScreen then
+        offsetX, offsetY = Client.ClampAnchorToScreen(frame, point, relativePoint,
+            offsetX, offsetY)
+    end
     local ok = pcall(frame.SetPoint, frame, point, parent, relativePoint, offsetX, offsetY)
     if not ok then
         return false
@@ -27843,8 +28030,17 @@ else
 end
 PQ:DeclareCapability("questIdentity", "missing",
     "the client exposes no quest ID API; quest log rows are matched to the static database by title")
-PQ:DeclareCapability("completedQuestHistory", "missing",
-    "the client exposes no completed-quest query; history must be observed and stored by the addon")
+if Client.HasChatSend() then
+    PQ:DeclareCapability("completedQuestHistory", "unverified",
+        "the stock client exposes no completed-quest API, but Turtle's pfQuest extension documents "
+        .. "the server bridge used here: SendChatMessage('.queststatus', 'GUILD') followed by "
+        .. "CHAT_MSG_ADDON packets prefixed TWQUEST. The send and receive calls are guarded; a refused "
+        .. "or missing response leaves the prior saved history untouched")
+else
+    PQ:DeclareCapability("completedQuestHistory", "missing",
+        "the client exposes no completed-quest API and SendChatMessage is unavailable, so the Turtle "
+        .. ".queststatus server bridge cannot be requested")
+end
 PQ:DeclareCapability("questEvents", "verified",
     "measured 2026-08-20: QUEST_LOG_UPDATE, UNIT_QUEST_LOG_CHANGED, QUEST_WATCH_UPDATE, QUEST_FINISHED, "
     .. "QUEST_COMPLETE and PLAYER_LEVEL_UP fire; QUEST_ACCEPTED and QUEST_ITEM_UPDATE did not in that session. "

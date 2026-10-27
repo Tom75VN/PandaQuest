@@ -4,12 +4,11 @@ PandaQuest / Quest/QuestHistory.lua
 Locally-tracked quest completions, keyed by database quest ID.
 
 This client exposes no quest-ID-returning call and no completed-quest history
-call at all (docs/CLIENT-COMPATIBILITY.md, "No quest ID API"). A "still to
-take" map marker can therefore never know about a quest the player finished
-before this addon was first loaded -- there is nothing to ask the server or
-the client. What it CAN do is remember, from here on, every quest it
-personally watches disappear from the quest log while complete, plus whatever
-the player marks by hand. That is the full extent of what "done" means here.
+call at all (docs/CLIENT-COMPATIBILITY.md, "No quest ID API"). Local tracking
+therefore remembers quests this addon watches leave the log, plus manual
+history. Turtle's separate `.queststatus` chat bridge can replace
+that estimate with the server's full list; Quest/ServerQuestQuery.lua owns that
+optional, guarded path.
 
 Storage goes through Config's existing shallow section store (SavedVariables),
 keyed by the numeric quest ID -- never a title, path or other unsafe string --
@@ -27,10 +26,9 @@ from so it can be taken back on its own:
     gesture. That split is what lets /pq resetmarked undo only what the player
     clicked, without also un-completing quests this addon correctly inferred
     from watching the log on its own.
-  * questHistoryImported -- every quest ID that came in from another addon's
-    saved history (Quest/PfQuestImport.lua). An import is a bulk claim about a
-    career this addon never watched, sourced from data it cannot verify, so it
-    has to be reversible as one act rather than one quest at a time.
+  * questHistoryImported -- quest IDs a former addon-history import wrote.
+    Nothing writes it any more; existing saved entries are still honoured and
+    are cleared by MarkNotDone, ResetAll and the server replacement.
 
 The auto-detection below (QUEST_REMOVED and the turn-in window) writes to
 neither. A quest can be in
@@ -45,9 +43,31 @@ local QuestHistory = PQ:NewModule("QuestHistory")
 local SECTION = "questHistory"
 local MANUAL_SECTION = "questHistoryManual"
 local IMPORTED_SECTION = "questHistoryImported"
+local SERVER_VERSION_KEY = "serverQuestHistoryVersion"
+local SERVER_TIME_KEY = "serverQuestHistoryAt"
+local SERVER_COUNT_KEY = "serverQuestHistoryCount"
+local SERVER_HASH_A_KEY = "serverQuestHistoryHashA"
+local SERVER_HASH_B_KEY = "serverQuestHistoryHashB"
+local FINGERPRINT_MODULUS = 2147483629
 
 local function Config()
     return PQ:GetModule("Config")
+end
+
+local function Fingerprint(section)
+    local count = 0
+    local hashA = 0
+    local hashB = 0
+    local questId, value
+    for questId, value in pairs(section) do
+        if type(questId) == "number" and value == 1 then
+            count = count + 1
+            hashA = math.mod(hashA + questId * 131 + 17, FINGERPRINT_MODULUS)
+            hashB = math.mod(hashB + math.mod(questId * questId,
+                FINGERPRINT_MODULUS), FINGERPRINT_MODULUS)
+        end
+    end
+    return count, hashA, hashB
 end
 
 -- The keys of a section that are actually set, as an array. Collected before
@@ -132,53 +152,12 @@ function QuestHistory:MarkDoneManually(questId)
     return config:SetSectionEntry(SECTION, questId, 1)
 end
 
--- The import counterpart: the same effect on the "done" flag, plus a record in
--- IMPORTED_SECTION so the whole import can be rolled back later.
---
--- Returns false when the quest was ALREADY done before this call, so an
--- importer can report how many quests it actually added rather than how many
--- it looked at -- and so rolling that import back cannot un-complete a quest
--- this addon had established on its own. A quest already recorded keeps
--- whatever provenance it had; the import does not claim it.
-function QuestHistory:MarkDoneImported(questId)
-    if type(questId) ~= "number" then
-        return false
-    end
-    local config = Config()
-    if not config then
-        return false
-    end
-    if config:GetSection(SECTION)[questId] == 1 then
-        return false
-    end
-    config:SetSectionEntry(IMPORTED_SECTION, questId, 1)
-    return config:SetSectionEntry(SECTION, questId, 1)
-end
-
 -- Clears every quest ID recorded in MANUAL_SECTION from both sections and
 -- returns how many were reset. Quests QuestHistory learned about on its own
 -- (QUEST_REMOVED while complete) were never added to MANUAL_SECTION, so they
 -- are left exactly as they were.
 function QuestHistory:ResetManual()
     return ClearShadowSection(MANUAL_SECTION)
-end
-
--- Clears every quest ID that came in through an import, from both sections,
--- and returns the list. Quests this addon inferred for itself and quests the
--- player marked by hand were never written to IMPORTED_SECTION, so they are
--- left exactly as they were -- an import can be undone without costing the
--- player the history they earned in this addon.
-function QuestHistory:ResetImported()
-    return ClearShadowSection(IMPORTED_SECTION)
-end
-
--- How many quest IDs are recorded as having come from an import.
-function QuestHistory:GetImportedCount()
-    local config = Config()
-    if not config then
-        return 0
-    end
-    return table.getn(CollectMarked(config:GetSection(IMPORTED_SECTION)))
 end
 
 -- Every quest ID marked done, manual or not. Used to size the gap between
@@ -440,6 +419,49 @@ local function MarkMapDirty()
         driver:Wake("map.worldpins")
         driver:Wake("map.minimappins")
     end
+end
+
+-- Replaces the completion set only after the server query has assembled its
+-- whole response in a separate table. Manual/import provenance is cleared:
+-- the server result is authoritative and supersedes both kinds of estimate.
+function QuestHistory:ReplaceFromServer(history, queriedAt)
+    local config = Config()
+    if type(history) ~= "table" or not config then
+        return false, 0
+    end
+    local count, hashA, hashB = Fingerprint(history)
+    if not config:ReplaceSection(SECTION, history) then
+        return false, 0
+    end
+    config:ClearSection(MANUAL_SECTION)
+    config:ClearSection(IMPORTED_SECTION)
+    config:SetCharacter(SERVER_VERSION_KEY, 1)
+    config:SetCharacter(SERVER_TIME_KEY, queriedAt)
+    config:SetCharacter(SERVER_COUNT_KEY, count)
+    config:SetCharacter(SERVER_HASH_A_KEY, hashA)
+    config:SetCharacter(SERVER_HASH_B_KEY, hashB)
+    MarkMapDirty()
+    return true, count
+end
+
+-- Whether the current SavedVariables completion set still matches the last
+-- full server response. The timestamp is wall-clock time and therefore remains
+-- meaningful after reloads; the two hashes avoid retaining a second huge set.
+function QuestHistory:GetServerSyncInfo()
+    local config = Config()
+    if not config or config:GetCharacter(SERVER_VERSION_KEY) ~= 1 then
+        return { available = false, matches = false }
+    end
+    local count, hashA, hashB = Fingerprint(config:GetSection(SECTION))
+    return {
+        available = true,
+        matches = count == config:GetCharacter(SERVER_COUNT_KEY)
+            and hashA == config:GetCharacter(SERVER_HASH_A_KEY)
+            and hashB == config:GetCharacter(SERVER_HASH_B_KEY),
+        queriedAt = config:GetCharacter(SERVER_TIME_KEY),
+        count = config:GetCharacter(SERVER_COUNT_KEY) or 0,
+        currentCount = count,
+    }
 end
 
 function QuestHistory:RecordTurnIn(questId)

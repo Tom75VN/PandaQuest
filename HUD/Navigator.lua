@@ -260,6 +260,8 @@ function Navigator:CapturePosition()
         type(relativePoint) == "string" and relativePoint or point)
     config:Set("navigatorX", x)
     config:Set("navigatorY", y)
+    -- A drop is placed against the current screen; its heal is kept again.
+    self.followScreen = nil
     return true
 end
 
@@ -874,9 +876,15 @@ function Navigator:RefreshArrow()
     -- stored point at 20Hz would pin the frame under the cursor and make a
     -- correctly wired drag look broken.
     if not self.dragging then
+        -- After a UI-scale change the dial is kept on screen without storing
+        -- the correction, until the next drop (Client.PositionNavigator).
+        self.screenLayout = self.screenLayout or {}
+        if Client.ScreenLayoutChanged(self.screenLayout) then
+            self.followScreen = true
+        end
         local offsetX, offsetY, scale, point, relativePoint = self:Placement()
         local placed, placedX, placedY, moved = Client.PositionNavigator(frame,
-            offsetX, offsetY, scale, point, relativePoint)
+            offsetX, offsetY, scale, point, relativePoint, self.followScreen)
         if placed then
             -- The saved anchor left the dial off screen (a position stored
             -- mirrored by an earlier release, or a smaller screen); keep the

@@ -235,9 +235,9 @@ Everything is picked from the tracker's spyglass menu and shown on both maps.
 
 ## Settings and commands
 
-- A standalone settings window (General, Quest dialogue and Mob tracking tabs) that becomes a "PandaQuest" entry in pandaUI's settings when it is installed.
+- A standalone settings window (General, Quest dialogue, Mob tracking and Import tabs) that becomes a "PandaQuest" entry in pandaUI's settings when it is installed.
 - A settings button beside the minimap.
-- **pfQuest import**: bring in pfQuest's completed-quest history so finished quests stay off the map; it can be undone.
+- **Import**: ask the server for this character's completed quests so finished quests stay off the map.
 
 | Command | What it does |
 |---|---|
@@ -250,12 +250,11 @@ Everything is picked from the tracker's spyglass menu and shown on both maps.
 | `/pq marks on\|off` | Raid marks over quest creatures |
 | `/pq rare on\|off` | The rare, elite and boss alert |
 | `/pq announce on\|off` | Objective progress in party chat |
-| `/pq pfquest import` | Import pfQuest's quest history |
 | `/pq status` | What this build detected about the client |
 
 ## Version
 
-Current release: 0.5.3
+Current release: 0.5.4
 
 ## License
 

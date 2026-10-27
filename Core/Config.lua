@@ -21,8 +21,7 @@ TWO STORES, AND THE LINE BETWEEN THEM.
     A player who sets a tracker width or picks an objective style means it for
     the whole account, and having to set it again on every alt would be a bug.
   * `PandaQuestCharDB` (`## SavedVariablesPerCharacter`) is per CHARACTER and
-    holds what a character DID: the quest-completion record and the state of
-    the pfQuest import that can seed it. A completion is a fact about one
+    holds what a character DID: the quest-completion record. A completion is a fact about one
     character; sharing it across an account marks quests done on a level-1 alt
     that has never left its starting zone.
 
@@ -48,8 +47,8 @@ local MAX_SET_ENTRIES = 250
 -- ceiling for the quest-history sections, which hold one entry per quest the
 -- character has ever finished and grow monotonically: 250 is reached by a
 -- character who is nowhere near done, and everything past it is silently
--- refused. Importing pfQuest's history (Quest/PfQuestImport.lua) hits that
--- wall immediately, since it arrives as a whole career at once.
+-- refused. The server query (Quest/ServerQuestQuery.lua) hits that wall
+-- immediately, since it arrives as a whole career at once.
 --
 -- The bound is the bundled data itself: Database/quests.lua carries 4433
 -- Vanilla quests, so a history can never legitimately name more than that.
@@ -771,8 +770,8 @@ function Config:StoreFor(name)
 end
 
 -- Per-character scalars, for state that belongs to one character but is not a
--- keyed set: the pfQuest import's pending flag and the addon state it has to
--- put back. Same safety rules as Config:Set.
+-- keyed set: the server query's freshness record. Same safety rules as
+-- Config:Set.
 function Config:GetCharacter(key)
     if not self.characterStore then
         return nil
@@ -871,6 +870,34 @@ function Config:ClearSection(name)
         return
     end
     store[name] = {}
+end
+
+-- Replaces a whole section in one assignment after validating it. Server
+-- history uses this so an interrupted multi-tick query leaves the previous
+-- completion set intact instead of saving a half-applied response.
+function Config:ReplaceSection(name, source)
+    local store = self:StoreFor(name)
+    if not store or type(source) ~= "table" then
+        return false
+    end
+    local replacement = {}
+    local count = 0
+    local limit = SectionLimit(name)
+    local key, value
+    for key, value in pairs(source) do
+        if count >= limit then
+            PQ:Warn(PQ.L("CONFIG_SECTION_FULL", tostring(name)))
+            return false
+        end
+        if (type(key) == "number" or IsSafeString(key)) and IsSafeScalar(value) then
+            replacement[key] = value
+            count = count + 1
+        else
+            return false
+        end
+    end
+    store[name] = replacement
+    return true
 end
 
 Config.IsSafeScalar = IsSafeScalar

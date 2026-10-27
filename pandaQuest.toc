@@ -2,7 +2,7 @@
 ## Title: |cffffffffPanda|cfff5ae0a Quest
 ## Notes: Quest helper for the OctoWoW client. A movable quest tracker and service-NPC selector, world-map pins on zone and continent maps, minimap pins, quest tracking and entity tooltips. A quest navigator arc and arrow point the way to the quest you are following, and a second one to a tracked creature - see docs/HUD-NAVIGATOR.md.
 ## Author: Thomas
-## Version: 0.5.3
+## Version: 0.5.4
 ## X-License: MIT. Bundled world data from pfQuest (MIT), sourced from VMaNGOS, with Turtle WoW 1.18.1 data from pfQuest-turtle by Rivi (MIT). See LICENSE.
 ## SavedVariables: PandaQuestDB
 ## SavedVariablesPerCharacter: PandaQuestCharDB
@@ -79,7 +79,7 @@ Data\ObjectiveMatch.lua
 Tooltip\EntityTooltip.lua
 Quest\BagItems.lua
 Quest\QuestHistory.lua
-Quest\PfQuestImport.lua
+Quest\ServerQuestQuery.lua
 Quest\QuestEligibility.lua
 Quest\Tracker.lua
 Quest\StandaloneQuestLog.lua

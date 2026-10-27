@@ -50,12 +50,12 @@ local SETTINGS_MASCOT_TEXTURE =
 local SETTINGS_MASCOT_SIZE = 185
 local SETTINGS_MASCOT_ALPHA = 0.2
 local SETTINGS_MASCOT_INSET = 8
--- The submenu's four pages, one per section of the page. Under a settings group
+-- The submenu's pages, one per section of the page. Under a settings group
 -- TAB_ID names the group, and these name the rows inside it.
 local GENERAL_PAGE_ID = TAB_ID .. ".general"
 local DIALOGUE_PAGE_ID = TAB_ID .. ".dialogue"
 local MOBS_PAGE_ID = TAB_ID .. ".mobs"
-local IMPORT_PAGE_ID = TAB_ID .. ".import"
+local SERVER_PAGE_ID = TAB_ID .. ".server"
 
 -- The page's own first line: "Panda Quest" in the addon's two-tone wordmark,
 -- with the running version after it. The split is the one the TOC Title already
@@ -226,11 +226,10 @@ local INTERNAL_TAB_HEIGHT = 20
 local INTERNAL_TAB_ADVANCE = 27
 -- One width per tab, the widest label of the four languages each: four tabs and
 -- their 6px gaps fill the page's text width.
-local INTERNAL_TAB_WIDTHS = { general = 70, dialogue = 130, mobs = 140, import = 70 }
+local INTERNAL_TAB_WIDTHS = {
+    general = 60, dialogue = 91, mobs = 96, server = 58,
+}
 local INTERNAL_TAB_GAP = 6
--- A source's button, and the status text that starts beside it.
-local IMPORT_BUTTON_WIDTH = 190
-local IMPORT_TEXT_LEFT = 198
 local MOB_MIN_ROWS_PER_PAGE = 9
 local MOB_ROW_HEIGHT = 20
 -- One table, one upvalue: BuildMobSection is near the upvalue limit.
@@ -1062,85 +1061,47 @@ local function BuildDialogueSection(page)
     })
 end
 
--- The Import section: copies the finished quests of a quest addon the player
--- used before, with the steps written out above the three buttons.
---
--- This client has no completed-quest API, so a fresh install cannot know which
--- quests the character already finished -- see Quest/QuestHistory.lua. pfQuest,
--- Questie-Octo and Questline each kept that record, and where one is loaded it
--- can be copied in (Quest/PfQuestImport.lua).
---
--- Each row's status is rewritten on every page open and after every press, so
--- the number the player reads is the number the button would act on. The status
--- gets a fixed two-line body because it is rewritten at runtime and the cursor
--- cannot re-measure it; DescribeShort() is written to fit that, and the
--- breakdown lives in `/pq pfquest`. Each row's button does whatever the
--- situation needs, and its label says which -- see PfQuestImport:GetButtonLabel
--- and :Press.
-local function BuildImportSection(page)
-    page.Heading(PQ.L("SETTINGS_HEADING_QUEST_HISTORY"))
-    page.Body(PQ.L("SETTINGS_IMPORT_INTRO"))
-    page.Body(PQ.L("SETTINGS_IMPORT_STEP_1"))
-    page.Body(PQ.L("SETTINGS_IMPORT_STEP_2"))
-    page.Body(PQ.L("SETTINGS_IMPORT_STEP_3"))
-    page.Body(PQ.L("SETTINGS_IMPORT_STEP_4"))
-    page.Body(PQ.L("SETTINGS_IMPORT_STEP_5"))
-    page.Gap(6)
+-- Downloads this character's complete quest history from Turtle's server.
+-- The module owns the job and survives this page being closed; this builder
+-- only presents its live state and the saved snapshot's freshness.
+local function BuildServerHistorySection(page)
+    page.Heading(PQ.L("SETTINGS_SERVER_HEADING"))
+    page.Body(PQ.L("SETTINGS_SERVER_INTRO"), 0, 3)
+    page.Body(PQ.L("SETTINGS_SERVER_REPLACES"), 0, 2)
+    page.Heading(PQ.L("SETTINGS_SERVER_BEFORE"))
+    page.Body(PQ.L("SETTINGS_SERVER_INSTRUCTIONS"), 0, 4)
+    page.Gap(4)
 
-    local importer = PQ:GetModule("PfQuestImport")
-    local sources = importer and importer:GetSources() or {}
-    local rows = {}
+    local query = PQ:GetModule("ServerQuestQuery")
+    local button = page.Button("serverQuestQuery", PQ.L("SERVER_QUERY_BUTTON"),
+        function()
+            local module = PQ:GetModule("ServerQuestQuery")
+            if module then module:Start() end
+        end, 220)
+    local activity = page.Add(Client.CreateSettingsQueryActivity(page.parent,
+        WidgetName("serverQuestActivity"), 0, page.y, TEXT_WIDTH))
+    page.y = page.y - 26
+    local detail = page.Body(PQ.L("SERVER_QUERY_STATUS_READY"), 0, 2)
+    local freshness = page.Body(PQ.L("SERVER_QUERY_NEVER"), 0, 2)
 
-    local function RefreshImportRows()
-        local module = PQ:GetModule("PfQuestImport")
+    local function RefreshServerQuery()
+        local module = PQ:GetModule("ServerQuestQuery")
         if not module then
+            Client.SetSettingsBodyText(detail, PQ.L("SERVER_QUERY_FAILED_HISTORY"))
             return
         end
-        local index = 1
-        while index <= table.getn(rows) do
-            local row = rows[index]
-            Client.SetSettingsBodyText(row.status, module:DescribeShort(nil, row.id))
-            Client.SetButtonLabel(row.button, module:GetButtonLabel(row.id))
-            index = index + 1
-        end
+        Client.SetButtonLabel(button, module:GetButtonText())
+        Client.SetButtonEnabled(button, not module.running)
+        Client.SetSettingsQueryActivity(activity, module.running,
+            module.progress, module.angle)
+        Client.SetSettingsBodyText(detail, module:GetDetailText())
+        Client.SetSettingsBodyText(freshness, module:GetFreshnessText())
     end
 
-    local function AddSourceRow(def)
-        local row = { id = def.id }
-        row.button = page.Button(def.button, def.name, function()
-            local module = PQ:GetModule("PfQuestImport")
-            if module then
-                module:Press(def.id)
-            end
-            RefreshImportRows()
-        end, IMPORT_BUTTON_WIDTH, { advance = 0 })
-        row.status = page.Body(PQ.L("SETTINGS_PFQUEST_CHECKING"), IMPORT_TEXT_LEFT, 2)
-        page.Gap(6)
-        table.insert(rows, row)
+    page.Sync(RefreshServerQuery)
+    if query then
+        query:SetStatusCallback(RefreshServerQuery)
     end
-
-    local index = 1
-    while index <= table.getn(sources) do
-        AddSourceRow(sources[index])
-        index = index + 1
-    end
-
-    page.Button("importUndo", PQ.L("SETTINGS_IMPORT_UNDO"), function()
-        local module = PQ:GetModule("PfQuestImport")
-        if not module then
-            return
-        end
-        local total = module:Undo()
-        if total > 0 then
-            PQ:Print(PQ.LN("IMPORT_UNDO_DONE", total))
-        else
-            PQ:Print(PQ.L("IMPORT_UNDO_NOTHING"))
-        end
-        RefreshImportRows()
-    end, IMPORT_BUTTON_WIDTH, { advance = 0 })
-    page.Body(PQ.L("SETTINGS_IMPORT_UNDO_NOTE"), IMPORT_TEXT_LEFT, 2)
-
-    page.Sync(RefreshImportRows)
 end
 
 -- The Mob tracking section: the creature search, the tracked-creature band and
@@ -1461,14 +1422,14 @@ end
 
 -- `section` nil builds the whole page, every section under the internal tab
 -- strip: the standalone window, and an pandaUI without settings groups.
--- "general", "dialogue", "mobs" or "import" builds that section alone with no strip, for a page of
+-- A named section builds that section alone with no strip, for a page of
 -- pandaUI's submenu, where the sidebar rows are the tabs.
 function Settings:BuildPage(parent, section)
     if not parent then
         return {}, nil
     end
     if section ~= "general" and section ~= "dialogue" and section ~= "mobs"
-        and section ~= "import" then
+        and section ~= "server" then
         section = nil
     end
 
@@ -1486,8 +1447,8 @@ function Settings:BuildPage(parent, section)
     local generalWidgets = {}
     local dialogueWidgets = {}
     local mobWidgets = {}
-    local importWidgets = {}
-    local generalTab, dialogueTab, mobTab, importTab
+    local serverWidgets = {}
+    local generalTab, dialogueTab, mobTab, serverTab
     local RefreshMobResults, mobSearchInput
 
     -- The page draws no wordmark heading of its own: both hosts already title
@@ -1516,18 +1477,18 @@ function Settings:BuildPage(parent, section)
     end
 
     local function ApplyInternalTab(tab)
-        if tab ~= "mobs" and tab ~= "dialogue" and tab ~= "import" then
+        if tab ~= "mobs" and tab ~= "dialogue" and tab ~= "server" then
             tab = "general"
         end
         Settings.activePageTab = tab
         ShowGroup(generalWidgets, tab == "general")
         ShowGroup(dialogueWidgets, tab == "dialogue")
         ShowGroup(mobWidgets, tab == "mobs")
-        ShowGroup(importWidgets, tab == "import")
+        ShowGroup(serverWidgets, tab == "server")
         Client.SetSettingsTabSelected(generalTab, tab == "general")
         Client.SetSettingsTabSelected(dialogueTab, tab == "dialogue")
         Client.SetSettingsTabSelected(mobTab, tab == "mobs")
-        Client.SetSettingsTabSelected(importTab, tab == "import")
+        Client.SetSettingsTabSelected(serverTab, tab == "server")
         if tab == "mobs" and type(RefreshMobResults) == "function" then
             RefreshMobResults()
         end
@@ -1546,7 +1507,7 @@ function Settings:BuildPage(parent, section)
         generalTab = AddInternalTab("general", "generalTab", "SETTINGS_TAB_GENERAL")
         dialogueTab = AddInternalTab("dialogue", "dialogueTab", "SETTINGS_TAB_DIALOGUE")
         mobTab = AddInternalTab("mobs", "mobTrackingTab", "SETTINGS_TAB_MOB_TRACKING")
-        importTab = AddInternalTab("import", "importTab", "SETTINGS_TAB_IMPORT")
+        serverTab = AddInternalTab("server", "serverTab", "SETTINGS_TAB_IMPORT")
         page.y = page.y - INTERNAL_TAB_ADVANCE
     end
     local contentTop = page.y
@@ -1574,18 +1535,18 @@ function Settings:BuildPage(parent, section)
         mobHeight = -page.y
     end
 
-    local importHeight = 0
-    if not section or section == "import" then
-        page.Group(importWidgets)
+    local serverHeight = 0
+    if not section or section == "server" then
+        page.Group(serverWidgets)
         page.y = contentTop
-        BuildImportSection(page)
-        importHeight = -page.y
+        BuildServerHistorySection(page)
+        serverHeight = -page.y
     end
     page.Group(nil)
 
     -- Each open also records which section the player is on, so /pq config
     -- returns to it under either host.
-    if section == "general" or section == "dialogue" or section == "import" then
+    if section == "general" or section == "dialogue" or section == "server" then
         page.Sync(function()
             Settings.activePageTab = section
         end)
@@ -1612,8 +1573,8 @@ function Settings:BuildPage(parent, section)
     if mobHeight > self.pageHeight then
         self.pageHeight = mobHeight
     end
-    if importHeight > self.pageHeight then
-        self.pageHeight = importHeight
+    if serverHeight > self.pageHeight then
+        self.pageHeight = serverHeight
     end
     if not hostScrolls and self.pageHeight > availableHeight then
         PQ:Warn(PQ.L("SETTINGS_WARN_PAGE_TOO_TALL",
@@ -1704,13 +1665,13 @@ function Settings:RegisterWithPandaUI(host)
             function(content)
                 return Settings:BuildPage(content, "mobs")
             end, { parent = TAB_ID, after = DIALOGUE_PAGE_ID })
-        local okImport, importPage = pcall(host.RegisterSettingsTab, IMPORT_PAGE_ID,
+        local okServer, serverPage = pcall(host.RegisterSettingsTab, SERVER_PAGE_ID,
             PQ.L("SETTINGS_TAB_IMPORT"),
             function(content)
-                return Settings:BuildPage(content, "import")
+                return Settings:BuildPage(content, "server")
             end, { parent = TAB_ID, after = MOBS_PAGE_ID })
         if not okGeneral or not general or not okDialogue or not dialogue
-            or not okMobs or not mobs or not okImport or not importPage then
+            or not okMobs or not mobs or not okServer or not serverPage then
             return false
         end
         self.registered = true
@@ -1755,7 +1716,7 @@ function Settings:ResolveHost(force)
                 .. (self.hostLayout == "group"
                     and ("as a submenu (U.RegisterSettingsGroup '" .. TAB_ID .. "', pages '"
                         .. GENERAL_PAGE_ID .. "', '" .. DIALOGUE_PAGE_ID .. "', '"
-                        .. MOBS_PAGE_ID .. "' and '" .. IMPORT_PAGE_ID .. "')")
+                        .. MOBS_PAGE_ID .. "' and '" .. SERVER_PAGE_ID .. "')")
                     or ("(U.RegisterSettingsTab, id '" .. TAB_ID .. "')"))
                 .. ". The page is drawn inside "
                 .. "pandaUI's settings window; /pq config opens it there. Detected by type-checking "
@@ -2134,8 +2095,8 @@ function Settings:Open()
                     pageId = MOBS_PAGE_ID
                 elseif self.activePageTab == "dialogue" then
                     pageId = DIALOGUE_PAGE_ID
-                elseif self.activePageTab == "import" then
-                    pageId = IMPORT_PAGE_ID
+                elseif self.activePageTab == "server" then
+                    pageId = SERVER_PAGE_ID
                 end
             end
             local ok, opened = pcall(pandaUI.OpenSettingsPage, pageId)

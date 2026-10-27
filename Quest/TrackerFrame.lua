@@ -2271,7 +2271,11 @@ local POSITION_CHECK_DELAY = 3
 function TrackerFrame:CheckPositionOnScreen()
     -- Never under a drag or a resize: re-applying the stored anchor then would
     -- yank the window out from under the cursor.
-    if self.positionChecked or self.dragging or self.resizeStartX then
+    if self.dragging or self.resizeStartX then
+        return
+    end
+    if self.positionChecked then
+        self:FollowScreenLayout()
         return
     end
     local now = Client.Now()
@@ -2286,7 +2290,32 @@ function TrackerFrame:CheckPositionOnScreen()
         return
     end
     self.positionChecked = true
+    -- Records the screen this check is made against.
+    self:FollowScreenLayout()
     self:ApplyStoredPosition()
+end
+
+-- A UI-scale or resolution change after that check: a larger scale shrinks
+-- the screen in UIParent units and can push the window past an edge. The
+-- stored anchor is clamped to the new screen and applied, never stored, so a
+-- smaller scale puts the window back where it was saved.
+function TrackerFrame:FollowScreenLayout()
+    self.screenLayout = self.screenLayout or {}
+    if not Client.ScreenLayoutChanged(self.screenLayout) then
+        return
+    end
+    local window = self.window
+    local point = Setting("trackerPoint")
+    local relativePoint = Setting("trackerRelativePoint")
+    local x = Setting("trackerX")
+    local y = Setting("trackerY")
+    if not window or type(point) ~= "string" or type(x) ~= "number"
+        or type(y) ~= "number" then
+        return
+    end
+    relativePoint = type(relativePoint) == "string" and relativePoint or point
+    x, y = Client.ClampAnchorToScreen(window, point, relativePoint, x, y)
+    Client.SetFrameAnchor(window, point, "UIParent", relativePoint, x, y, true)
 end
 
 function TrackerFrame:CapturePosition()
