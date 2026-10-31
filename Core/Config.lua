@@ -35,6 +35,7 @@ which is how pfQuest's own per-character history is stored.
 ]]
 
 local PQ = PandaQuest
+local Client = PQ.Client
 local Config = PQ:NewModule("Config")
 
 local SCHEMA = 1
@@ -489,7 +490,8 @@ local defaults = {
     -- quest and tracking it are separate ideas.
     mainQuestAutoTrack = false,
 
-    waypointEnabled = true,
+    -- Seeded in OnInit when the dormant HUD feature is enabled.
+    waypointEnabled = false,
 
     -- 20Hz. Fast enough that the marker slides rather than steps while the
     -- player turns; the job body allocates nothing per tick beyond its label.
@@ -669,6 +671,21 @@ function Config:OnInit()
     for key, value in pairs(defaults) do
         if PandaQuestDB[key] == nil then
             PandaQuestDB[key] = value
+        end
+    end
+
+    if PQ:IsFeatureEnabled("hudWorldMarker") then
+        -- Seed the option from ClassicAPI once. If the DLL is installed later,
+        -- enable it on that first detected launch, then preserve the choice.
+        local classicAPIDetected = Client.GetClassicAPIStatus()
+        if type(PandaQuestDB.hudMarkerDefaultVersion) ~= "number"
+            or PandaQuestDB.hudMarkerDefaultVersion < 1 then
+            PandaQuestDB.waypointEnabled = classicAPIDetected and true or false
+            PandaQuestDB.hudMarkerClassicAPISeen = classicAPIDetected and true or false
+            PandaQuestDB.hudMarkerDefaultVersion = 1
+        elseif classicAPIDetected and PandaQuestDB.hudMarkerClassicAPISeen ~= true then
+            PandaQuestDB.waypointEnabled = true
+            PandaQuestDB.hudMarkerClassicAPISeen = true
         end
     end
 

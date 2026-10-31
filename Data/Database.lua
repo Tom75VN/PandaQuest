@@ -367,6 +367,12 @@ local DATA_FIXES = {
         itemId = 7675,
         sourceUnitIds = { 6846 },
     },
+    {
+        -- Lucky Coin. Its objective points at an unspawned dummy unit, while
+        -- the matching Stormwind Fountain Trigger object has the exact points.
+        questId = 60050,
+        objectiveObjectIds = { 1000220 },
+    },
 }
 
 -- Writes one DATA_FIXES entry into the loaded tables. Silent on anything it
@@ -376,6 +382,31 @@ local function ApplyDataFix(fix)
     local quest = db.quests and db.quests[fix.questId]
     if type(quest) ~= "table" then
         return
+    end
+
+    if type(fix.objectiveObjectIds) == "table" then
+        if type(quest.obj) ~= "table" then
+            quest.obj = {}
+        end
+        if type(quest.obj.O) ~= "table" then
+            quest.obj.O = {}
+        end
+        local index = 1
+        local total = table.getn(fix.objectiveObjectIds)
+        while index <= total do
+            local objectId = fix.objectiveObjectIds[index]
+            local present = false
+            local _, existing
+            for _, existing in pairs(quest.obj.O) do
+                if existing == objectId then
+                    present = true
+                end
+            end
+            if not present then
+                table.insert(quest.obj.O, objectId)
+            end
+            index = index + 1
+        end
     end
 
     if type(fix.useTargets) == "table" then
@@ -397,7 +428,7 @@ local function ApplyDataFix(fix)
         end
     end
 
-    if type(db.items) == "table" then
+    if type(fix.itemId) == "number" and type(db.items) == "table" then
         if type(db.items[fix.itemId]) ~= "table" then
             db.items[fix.itemId] = {}
         end
@@ -1586,10 +1617,36 @@ function Database:GetItemSellPrice(itemId)
     return price
 end
 
+-- The choose-one reward item IDs of a quest whose reward names alone cannot
+-- settle a price (sellprices.lua, questchoiceitems), or nil.
+function Database:GetQuestChoiceItems(questId)
+    local choices = db and db.questchoiceitems
+    if type(choices) ~= "table" or type(questId) ~= "number" then
+        return nil
+    end
+    local items = choices[questId]
+    if type(items) ~= "table" then
+        return nil
+    end
+    return items
+end
+
+local function ListHas(list, value)
+    local index = 1
+    while index <= table.getn(list) do
+        if list[index] == value then
+            return true
+        end
+        index = index + 1
+    end
+    return false
+end
+
 -- The sell price of a live client-locale item name, under the same rule as
 -- GetItemDisplayNameForLanguage: every item ID carrying that name must agree,
--- or the name has no price.
-function Database:GetItemSellPriceByName(nativeName)
+-- or the name has no price. `candidates` (the quest's choice item IDs, from
+-- GetQuestChoiceItems) narrows a shared name to the IDs the quest offers.
+function Database:GetItemSellPriceByName(nativeName, candidates)
     if type(nativeName) ~= "string" or nativeName == ""
         or not self.itemNameIndexReady or type(self.itemNameIndex) ~= "table" then
         return nil
@@ -1601,15 +1658,25 @@ function Database:GetItemSellPriceByName(nativeName)
     if type(ids) ~= "table" then
         return nil
     end
+    local narrowed = false
+    if type(candidates) == "table" then
+        local index = 1
+        while index <= table.getn(ids) and not narrowed do
+            narrowed = ListHas(candidates, ids[index])
+            index = index + 1
+        end
+    end
     local price = nil
     local index = 1
     local total = table.getn(ids)
     while index <= total do
-        local candidate = self:GetItemSellPrice(ids[index])
-        if candidate == nil or (price ~= nil and price ~= candidate) then
-            return nil
+        if not narrowed or ListHas(candidates, ids[index]) then
+            local candidate = self:GetItemSellPrice(ids[index])
+            if candidate == nil or (price ~= nil and price ~= candidate) then
+                return nil
+            end
+            price = candidate
         end
-        price = candidate
         index = index + 1
     end
     return price

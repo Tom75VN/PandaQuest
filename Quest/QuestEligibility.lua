@@ -240,6 +240,17 @@ function QuestEligibility:IsLowLevel(questId)
     return Client.IsQuestLevelTrivial(record.lvl, self.level, self.greenRange)
 end
 
+-- A quest well above the character (the red band) is still offered and shown,
+-- only greyed on the map.
+function QuestEligibility:IsTooHighLevel(questId)
+    local database = Database()
+    local record = database and database:GetQuest(questId)
+    if type(record) ~= "table" then
+        return false
+    end
+    return Client.IsQuestLevelTooHigh(record.lvl, self.level)
+end
+
 -- Returns true plus nil, or false plus the reason it was filtered out. An
 -- unknown player attribute never filters: a missing race id must not blank the
 -- map, so each test is skipped rather than failed when its input is absent.

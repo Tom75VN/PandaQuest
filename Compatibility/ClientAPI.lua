@@ -97,6 +97,19 @@ function Client.GetGlobalString(name)
     return value
 end
 
+-- ClassicAPI publishes this numeric version constant when its DLL is loaded.
+-- The packed form is major*10000 + minor*100 + patch.
+function Client.GetClassicAPIStatus()
+    local ok, packed = pcall(getglobal, "CLASSIC_API_VERSION")
+    if not ok or type(packed) ~= "number" or packed <= 0 then
+        return false, nil
+    end
+    local major = math.floor(packed / 10000)
+    local minor = math.floor(math.mod(packed, 10000) / 100)
+    local patch = math.mod(packed, 100)
+    return true, tostring(major) .. "." .. tostring(minor) .. "." .. tostring(patch)
+end
+
 -- Guarded calls. Call0/1/2 keep the argument lists explicit rather than relying
 -- on varargs, which keeps the layer inside the conservative Lua subset.
 
@@ -1431,6 +1444,18 @@ function Client.IsQuestLevelTrivial(questLevel, playerLevel, greenRange)
     return questLevel <= playerLevel - greenRange
 end
 
+-- The red band of GetQuestLevelColor (five or more levels above the player),
+-- as a boolean for the map's grey "!".
+function Client.IsQuestLevelTooHigh(questLevel, playerLevel)
+    if type(playerLevel) ~= "number" then
+        playerLevel = Client.GetPlayerLevel()
+    end
+    if type(questLevel) ~= "number" or type(playerLevel) ~= "number" then
+        return false
+    end
+    return questLevel - playerLevel >= 5
+end
+
 -- Map -----------------------------------------------------------------------
 -- Measured 2026-08-20: SetMapToCurrentZone makes GetMapInfo return "Elwynn"
 -- and GetPlayerMapPosition return non-zero coordinates. After reload the map
@@ -1795,6 +1820,29 @@ function Client.IsGameUIHidden()
         return nil
     end
     return not visible
+end
+
+-- True while the World Map is in the client's windowed (minimized) mode.
+-- Turtle-style FrameXML keeps WORLDMAP_WINDOWED at 0 or 1 (WorldMapFrame_Minimize
+-- / _Maximize); stock 1.12 has no windowed mode and no flag, so false there.
+-- Compat map.worldmap_zoom_windowed_wheel_client_crash.
+function Client.IsWorldMapWindowed()
+    local ok, flag = pcall(getglobal, "WORLDMAP_WINDOWED")
+    return ok and flag == 1
+end
+
+-- True while the windowed map is open. It is a UIParent child, so the game UI
+-- stays visible and IsGameUIHidden cannot tell it apart from a closed map.
+function Client.IsWindowedWorldMapOpen()
+    if not Client.IsWorldMapWindowed() then
+        return false
+    end
+    local frame = ResolveObject("WorldMapFrame")
+    if not frame or type(frame.IsVisible) ~= "function" then
+        return false
+    end
+    local ok, visible = pcall(frame.IsVisible, frame)
+    return ok and visible and true or false
 end
 
 function Client.CreateWorldMapPin(index, red, green, blue)
@@ -2230,11 +2278,16 @@ function Client.CreateWorldMapAreaGroup(index)
     if type(group.SetAllPoints) == "function" then
         pcall(group.SetAllPoints, group, canvas)
     end
-    local level = 1
+    -- PandaConquest places its area and route frames at canvas +1/+2. Keep
+    -- quest contours in PandaQuest's reserved map band: above those overlays,
+    -- but just below PandaQuest's pooled pins at canvas +20 (or level 120).
+    -- This fixed gap also avoids depending on which optional addon created its
+    -- same-level children first.
+    local level = 19
     if type(canvas.GetFrameLevel) == "function" and type(group.SetFrameLevel) == "function" then
         local levelOk, canvasLevel = pcall(canvas.GetFrameLevel, canvas)
         if levelOk and type(canvasLevel) == "number" then
-            level = canvasLevel + 1
+            level = canvasLevel + 19
         end
         pcall(group.SetFrameLevel, group, level)
     end
@@ -4941,6 +4994,80 @@ function Client.GetMinimapGeometry()
     return width, height, zoom
 end
 
+-- PandaUI owns the optional Circle/Square choice.  It may be absent, still
+-- loading, or reject the call while it rebuilds, so every uncertain outcome
+-- keeps PandaQuest's established round containment.
+function Client.IsMinimapSquare()
+    local host = ResolveObject("PandaUI")
+    if type(host) ~= "table" then
+        return false
+    end
+    local query = host.MinimapIsSquare
+    if type(query) ~= "function" then
+        return false
+    end
+    local ok, square = pcall(query)
+    return ok and square and true or false
+end
+
+-- The visible minimap bounds for an overlay whose outer edge needs `inset`
+-- pixels of room.  Round minimaps retain their shortest-side radius; PandaUI's
+-- square setting instead exposes the full rectangular canvas.
+function Client.GetMinimapClipBounds(width, height, inset, square)
+    if type(width) ~= "number" or type(height) ~= "number" then
+        return nil
+    end
+    inset = type(inset) == "number" and inset or 0
+    if square then
+        local halfWidth = width / 2 - inset
+        local halfHeight = height / 2 - inset
+        if halfWidth < 0 then halfWidth = 0 end
+        if halfHeight < 0 then halfHeight = 0 end
+        return halfWidth, halfHeight
+    end
+    local shortest = width
+    if height < shortest then shortest = height end
+    local radius = shortest / 2 - inset
+    if radius < 0 then radius = 0 end
+    return radius, radius
+end
+
+function Client.IsMinimapOffsetVisible(offsetX, offsetY, distance, limitX,
+    limitY, square)
+    if square then
+        return math.abs(offsetX) <= limitX and math.abs(offsetY) <= limitY
+    end
+    return distance <= limitX
+end
+
+-- Pulls an off-view direction back to the active shape's edge.  The round
+-- branch deliberately matches the existing rim arithmetic; square clipping
+-- uses the first horizontal or vertical edge the bearing reaches.
+function Client.ClampMinimapOffset(offsetX, offsetY, distance, limitX,
+    limitY, square)
+    if Client.IsMinimapOffsetVisible(offsetX, offsetY, distance, limitX,
+            limitY, square) then
+        return offsetX, offsetY, false
+    end
+    if square then
+        local scale = nil
+        local absX = math.abs(offsetX)
+        local absY = math.abs(offsetY)
+        if absX > 0 then scale = limitX / absX end
+        if absY > 0 then
+            local yScale = limitY / absY
+            if not scale or yScale < scale then scale = yScale end
+        end
+        if not scale then return offsetX, offsetY, false end
+        return offsetX * scale, offsetY * scale, true
+    end
+    if distance <= 0 then
+        return offsetX, offsetY, false
+    end
+    local scale = limitX / distance
+    return offsetX * scale, offsetY * scale, true
+end
+
 -- True while the minimap turns with the player. That case is unsupportable
 -- here rather than merely unimplemented: this client exposes no player facing
 -- by any route (see the facing section below), so a rotated pin cannot be
@@ -5718,7 +5845,16 @@ function Client.IsObjectMouseOver(object)
     return over and true or false
 end
 
-Client.WAYPOINT_TEXTURE = "Interface\\GossipFrame\\ActiveQuestIcon"
+-- Retail's SuperTrackedFrame uses the Navigation-Tracked-Icon atlas member.
+-- PandaQuest imports its complete 64x64 IngameNavigationUI sheet and selects
+-- the member's exact 25x37 pixel rectangle here.
+Client.WAYPOINT_TEXTURE =
+    "Interface\\AddOns\\pandaQuest\\media\\Textures\\HUD\\IngameNavigationUI"
+Client.WAYPOINT_TEXTURE_LEFT = 0.4375
+Client.WAYPOINT_TEXTURE_RIGHT = 0.828125
+Client.WAYPOINT_TEXTURE_TOP = 0
+Client.WAYPOINT_TEXTURE_BOTTOM = 0.578125
+Client.WAYPOINT_TEXTURE_ASPECT = 37 / 25
 
 -- Creates the single HUD marker: a mouse-transparent Frame over the 3D world.
 --
@@ -5754,7 +5890,7 @@ function Client.CreateWaypointMarker(name, size)
     end
     if type(frame.SetWidth) == "function" then
         pcall(frame.SetWidth, frame, size)
-        pcall(frame.SetHeight, frame, size)
+        pcall(frame.SetHeight, frame, size * Client.WAYPOINT_TEXTURE_ASPECT)
     end
 
     if type(frame.CreateTexture) == "function" then
@@ -5762,6 +5898,11 @@ function Client.CreateWaypointMarker(name, size)
         if okTexture and texture then
             if type(texture.SetTexture) == "function" then
                 pcall(texture.SetTexture, texture, Client.WAYPOINT_TEXTURE)
+            end
+            if type(texture.SetTexCoord) == "function" then
+                pcall(texture.SetTexCoord, texture,
+                    Client.WAYPOINT_TEXTURE_LEFT, Client.WAYPOINT_TEXTURE_RIGHT,
+                    Client.WAYPOINT_TEXTURE_TOP, Client.WAYPOINT_TEXTURE_BOTTOM)
             end
             if type(texture.SetAllPoints) == "function" then
                 pcall(texture.SetAllPoints, texture, frame)
@@ -5845,6 +5986,146 @@ function Client.PositionWaypointMarker(frame, offsetX, offsetY)
         return false
     end
     pcall(frame.Show, frame)
+    return true
+end
+
+-- Anchors PandaQuest's marker to a ClassicAPI nameplate. The client moves the
+-- nameplate in screen space, so both camera yaw and pitch are inherited.
+function Client.AnchorWaypointMarker(frame, anchor)
+    if not frame or not anchor or type(frame.SetPoint) ~= "function" then
+        return false
+    end
+    if type(frame.ClearAllPoints) == "function" then
+        pcall(frame.ClearAllPoints, frame)
+    end
+    local ok = pcall(frame.SetPoint, frame, "BOTTOM", anchor, "TOP", 0, 4)
+    if not ok then
+        return false
+    end
+    pcall(frame.Show, frame)
+    return true
+end
+
+-- Finds a visible ClassicAPI nameplate whose creature ID belongs to the
+-- followed quest. The returned frame is already projected by the engine.
+function Client.FindClassicAPIQuestNameplate(unitIds)
+    if type(unitIds) ~= "table" then
+        return nil, nil
+    end
+    local nameplates = ResolveObject("C_NamePlate")
+    local creatureId = Resolve("UnitCreatureID")
+    local creatureInfo = ResolveObject("C_CreatureInfo")
+    if not nameplates or type(nameplates.GetNamePlateForUnit) ~= "function"
+        or not creatureId then
+        return nil, nil
+    end
+
+    if type(nameplates.GetNamePlateGUIDs) == "function"
+        and type(nameplates.GetNamePlateForGUID) == "function" then
+        local okGuids, guids = pcall(nameplates.GetNamePlateGUIDs)
+        if okGuids and type(guids) == "table" then
+            local guidIndex = 1
+            local guidTotal = table.getn(guids)
+            while guidIndex <= guidTotal do
+                local guid = guids[guidIndex]
+                local id = nil
+                if type(guid) == "string" and creatureInfo
+                    and type(creatureInfo.GetCreatureID) == "function" then
+                    local okId, resolvedId = pcall(creatureInfo.GetCreatureID, guid)
+                    if okId then
+                        id = resolvedId
+                    end
+                end
+                if id and unitIds[id] then
+                    local okPlate, plate = pcall(nameplates.GetNamePlateForGUID, guid)
+                    if okPlate and plate then
+                        return plate, id
+                    end
+                end
+                guidIndex = guidIndex + 1
+            end
+        end
+    end
+
+    local tokens = Client.classicAPINameplateTokens
+    if not tokens then
+        tokens = {}
+        local tokenIndex = 1
+        while tokenIndex <= 40 do
+            tokens[tokenIndex] = "nameplate" .. tostring(tokenIndex)
+            tokenIndex = tokenIndex + 1
+        end
+        Client.classicAPINameplateTokens = tokens
+    end
+
+    local index = 1
+    while index <= table.getn(tokens) do
+        local token = tokens[index]
+        local okId, id = pcall(creatureId, token)
+        if okId and type(id) == "number" and unitIds[id] then
+            local okPlate, plate = pcall(nameplates.GetNamePlateForUnit, token)
+            if okPlate and plate then
+                return plate, id
+            end
+        end
+        index = index + 1
+    end
+    return nil, nil
+end
+
+-- Returns the ClassicAPI soft-interact entity type and database entry ID.
+-- Gameobject GUIDs use 0xF110 followed by the six-hex-digit entry ID.
+function Client.GetClassicAPISoftInteract()
+    local creatureId = Resolve("UnitCreatureID")
+    if creatureId then
+        local okCreature, id = pcall(creatureId, "softinteract")
+        if okCreature and type(id) == "number" and id > 0 then
+            return "unit", id
+        end
+    end
+
+    local unitGuid = Resolve("UnitGUID")
+    local playerInfo = ResolveObject("C_PlayerInfo")
+    if not unitGuid or not playerInfo
+        or type(playerInfo.GUIDIsGameObject) ~= "function" then
+        return nil, nil
+    end
+    local okGuid, guid = pcall(unitGuid, "softinteract")
+    if not okGuid or type(guid) ~= "string" then
+        return nil, nil
+    end
+    local okObject, isObject = pcall(playerInfo.GUIDIsGameObject, guid)
+    if not okObject or not isObject then
+        return nil, nil
+    end
+    local id = tonumber(string.sub(guid, 7, 12), 16)
+    if type(id) ~= "number" or id <= 0 then
+        return nil, nil
+    end
+    return "object", id
+end
+
+-- Temporary ClassicAPI CVars: soft targeting remains active while the HUD
+-- feature is enabled, across the whole camera view. PandaQuest owns quest
+-- target presentation, so its temporary settings always suppress ClassicAPI's
+-- native yellow question-mark icon. Removing them restores the player's CVar.
+function Client.SetClassicAPIHudCVars(active)
+    local cvar = ResolveObject("C_CVar")
+    if not cvar or type(cvar.SetTempCVar) ~= "function"
+        or type(cvar.RemoveTempCVar) ~= "function" then
+        return false
+    end
+    if active then
+        pcall(cvar.SetTempCVar, "SoftTargetInteract", "3")
+        pcall(cvar.SetTempCVar, "SoftTargetInteractArc", "2")
+        pcall(cvar.SetTempCVar, "SoftTargetIconInteract", "0")
+        pcall(cvar.SetTempCVar, "SoftTargetIconGameObject", "0")
+    else
+        pcall(cvar.RemoveTempCVar, "SoftTargetInteract")
+        pcall(cvar.RemoveTempCVar, "SoftTargetInteractArc")
+        pcall(cvar.RemoveTempCVar, "SoftTargetIconInteract")
+        pcall(cvar.RemoveTempCVar, "SoftTargetIconGameObject")
+    end
     return true
 end
 
@@ -14050,6 +14331,7 @@ function Client.GetTrackerRow(window, kind, index)
             button.pandaQuestMapOwned = window.pandaQuestMapOwned
             button.pandaQuestLabel = label
             button.pandaQuestLabelInset = labelInset
+            button.pandaQuestLabelOffsetY = kind == "zone" and TrackerArt.zoneLabelRise or 0
         end
     end
     -- Every quest gets the same numbered POI badge as its world-map area: the
@@ -14522,6 +14804,17 @@ function Client.SetTrackerRowProgress(row, fraction, red, green, blue)
     local fill = row and row.pandaQuestBarFill
     if not track or not fill then
         return false
+    end
+    local label = row.pandaQuestLabel
+    local raised = type(fraction) == "number"
+    if label and row.pandaQuestProgressLabelRaised ~= raised
+        and type(label.ClearAllPoints) == "function"
+        and type(label.SetPoint) == "function" then
+        pcall(label.ClearAllPoints, label)
+        pcall(label.SetPoint, label, "LEFT", row, "LEFT",
+            row.pandaQuestLabelInset or 0,
+            (row.pandaQuestLabelOffsetY or 0) + (raised and 2 or 0))
+        row.pandaQuestProgressLabelRaised = raised
     end
     if type(fraction) ~= "number" then
         Client.HideObject(track)
@@ -16347,12 +16640,82 @@ end
 -- The box is a plain Button with an owned bed texture and an owned tick,
 -- which is what pandaUI draws too; Client.SetSettingsCheckbox shows and
 -- hides the tick through the same pandaQuestMark field every toggle uses.
-local ModernCheckbox = {
+local ModernTheme = {
     texture = "Interface\\AddOns\\pandaQuest\\media\\Textures\\Settings\\checkbox-modern",
     width = 15.6, height = 15, gap = 4,
     box = { 1 / 64, 31 / 64, 1 / 64, 30 / 64 },
     tick = { 1 / 64, 31 / 64, 32 / 64, 61 / 64 },
+    thinBorder = {
+        size = 16,
+        topLeft = "Interface\\AddOns\\pandaQuest\\media\\Textures\\ModernWow\\ThinBorder\\thin-border-top-left",
+        top = "Interface\\AddOns\\pandaQuest\\media\\Textures\\ModernWow\\ThinBorder\\thin-border-top",
+        topRight = "Interface\\AddOns\\pandaQuest\\media\\Textures\\ModernWow\\ThinBorder\\thin-border-top-right",
+        left = "Interface\\AddOns\\pandaQuest\\media\\Textures\\ModernWow\\ThinBorder\\thin-border-left",
+        right = "Interface\\AddOns\\pandaQuest\\media\\Textures\\ModernWow\\ThinBorder\\thin-border-right",
+        bottomLeft = "Interface\\AddOns\\pandaQuest\\media\\Textures\\ModernWow\\ThinBorder\\thin-border-bottom-left",
+        bottom = "Interface\\AddOns\\pandaQuest\\media\\Textures\\ModernWow\\ThinBorder\\thin-border-bottom",
+    },
 }
+
+-- The imported ThinBorder family has no bottom-right corner, so only that
+-- eighth slice mirrors the authored bottom-left piece.
+function ModernTheme.BuildThinBorder(panel)
+    local spec = ModernTheme.thinBorder
+    if not panel or panel.pandaQuestThinBorder then
+        return panel and true or false
+    end
+    local function Piece(path, width, height)
+        if type(panel.CreateTexture) ~= "function" then return nil end
+        local ok, texture = pcall(panel.CreateTexture, panel, nil, "BORDER")
+        if not ok or not texture then return nil end
+        pcall(texture.SetTexture, texture, path)
+        if width then pcall(texture.SetWidth, texture, width) end
+        if height then pcall(texture.SetHeight, texture, height) end
+        return texture
+    end
+
+    local size = spec.size
+    local topLeft = Piece(spec.topLeft, size, size)
+    local topRight = Piece(spec.topRight, size, size)
+    local bottomLeft = Piece(spec.bottomLeft, size, size)
+    local bottomRight = Piece(spec.bottomLeft, size, size)
+    if topLeft then pcall(topLeft.SetPoint, topLeft, "TOPLEFT", panel, "TOPLEFT", 0, 0) end
+    if topRight then
+        pcall(topRight.SetPoint, topRight, "TOPRIGHT", panel, "TOPRIGHT", 0, 0)
+    end
+    if bottomLeft then
+        pcall(bottomLeft.SetPoint, bottomLeft, "BOTTOMLEFT", panel, "BOTTOMLEFT", 0, 0)
+    end
+    if bottomRight then
+        pcall(bottomRight.SetTexCoord, bottomRight, 1, 0, 0, 1)
+        pcall(bottomRight.SetPoint, bottomRight, "BOTTOMRIGHT", panel, "BOTTOMRIGHT", 0, 0)
+    end
+
+    local top = Piece(spec.top, nil, size)
+    if top and topLeft and topRight then
+        pcall(top.SetPoint, top, "TOPLEFT", topLeft, "TOPRIGHT", 0, 0)
+        pcall(top.SetPoint, top, "TOPRIGHT", topRight, "TOPLEFT", 0, 0)
+    end
+    local bottom = Piece(spec.bottom, nil, size)
+    if bottom and bottomLeft and bottomRight then
+        pcall(bottom.SetPoint, bottom, "BOTTOMLEFT", bottomLeft, "BOTTOMRIGHT", 0, 0)
+        pcall(bottom.SetPoint, bottom, "BOTTOMRIGHT", bottomRight, "BOTTOMLEFT", 0, 0)
+    end
+    local left = Piece(spec.left, size, nil)
+    if left and topLeft and bottomLeft then
+        pcall(left.SetPoint, left, "TOPLEFT", topLeft, "BOTTOMLEFT", 0, 0)
+        pcall(left.SetPoint, left, "BOTTOMLEFT", bottomLeft, "TOPLEFT", 0, 0)
+    end
+    local right = Piece(spec.right, size, nil)
+    if right and topRight and bottomRight then
+        pcall(right.SetPoint, right, "TOPRIGHT", topRight, "BOTTOMRIGHT", 0, 0)
+        pcall(right.SetPoint, right, "BOTTOMRIGHT", bottomRight, "TOPRIGHT", 0, 0)
+    end
+    panel.pandaQuestThinBorder = {
+        topLeft, top, topRight, left, right, bottomLeft, bottom, bottomRight,
+    }
+    return true
+end
 
 function Client.CreateTrackerAreaToggle(frame, text, onChange)
     local create = Resolve("CreateFrame")
@@ -16374,7 +16737,7 @@ function Client.CreateTrackerAreaToggle(frame, text, onChange)
     if type(boxLevel) == "number" and type(box.SetFrameLevel) == "function" then
         pcall(box.SetFrameLevel, box, boxLevel + 1)
     end
-    Client.SetObjectSize(box, ModernCheckbox.width, ModernCheckbox.height)
+    Client.SetObjectSize(box, ModernTheme.width, ModernTheme.height)
     if type(box.EnableMouse) == "function" then
         pcall(box.EnableMouse, box, true)
     end
@@ -16382,13 +16745,13 @@ function Client.CreateTrackerAreaToggle(frame, text, onChange)
         pcall(box.RegisterForClicks, box, "LeftButtonUp")
     end
 
-    local faces = { { "ARTWORK", ModernCheckbox.box }, { "OVERLAY", ModernCheckbox.tick } }
+    local faces = { { "ARTWORK", ModernTheme.box }, { "OVERLAY", ModernTheme.tick } }
     local index = 1
     while index <= 2 do
         local texture = CreateSolid(box, faces[index][1], 1, 1, 1, 1)
         if texture then
             local cell = faces[index][2]
-            pcall(texture.SetTexture, texture, ModernCheckbox.texture)
+            pcall(texture.SetTexture, texture, ModernTheme.texture)
             pcall(texture.SetTexCoord, texture, cell[1], cell[2], cell[3], cell[4])
             pcall(texture.SetAllPoints, texture, box)
         end
@@ -16409,20 +16772,20 @@ function Client.CreateTrackerAreaToggle(frame, text, onChange)
             local collapse = frame.pandaQuestCollapse
             if collapse then
                 pcall(label.SetPoint, label, "RIGHT", collapse, "LEFT",
-                    -ModernCheckbox.gap, 0)
+                    -ModernTheme.gap, 0)
             else
                 pcall(label.SetPoint, label, "RIGHT", frame, "TOPRIGHT",
-                    -(2 + TRACKER_BUTTON_SIZE + ModernCheckbox.gap),
+                    -(2 + TRACKER_BUTTON_SIZE + ModernTheme.gap),
                     -TRACKER_HEADER_HEIGHT / 2)
             end
             pcall(label.Hide, label)
             box.label = label
-            pcall(box.SetPoint, box, "RIGHT", label, "LEFT", -ModernCheckbox.gap, 0)
+            pcall(box.SetPoint, box, "RIGHT", label, "LEFT", -ModernTheme.gap, 0)
         end
     end
     if not box.label then
         pcall(box.SetPoint, box, "RIGHT", frame, "TOPRIGHT",
-            -(2 + TRACKER_BUTTON_SIZE + ModernCheckbox.gap), -TRACKER_HEADER_HEIGHT / 2)
+            -(2 + TRACKER_BUTTON_SIZE + ModernTheme.gap), -TRACKER_HEADER_HEIGHT / 2)
     end
 
     Client.SetObjectScript(box, "OnClick", function()
@@ -17137,9 +17500,10 @@ end
 local NPC_FILTER_FALLBACK_WIDTH = 196
 local NPC_FILTER_ROW_HEIGHT = 20
 local NPC_FILTER_PADDING = 6
-local NPC_FILTER_TRACK_MARK_WIDTH = 4
-local NPC_FILTER_TRACK_MARK_HEIGHT = NPC_FILTER_ROW_HEIGHT - 6
-local NPC_FILTER_LABEL_OFFSET = 14
+local NPC_FILTER_CHECKBOX_LEFT = 2
+local NPC_FILTER_CHECKBOX_GAP = 4
+local NPC_FILTER_LABEL_OFFSET =
+    NPC_FILTER_CHECKBOX_LEFT + ModernTheme.width + NPC_FILTER_CHECKBOX_GAP
 local NPC_FILTER_LABEL_ICON_GAP = 5
 local NPC_FILTER_ICON_SIZE = 14
 local NPC_FILTER_ICON_RIGHT_INSET = 3
@@ -17219,10 +17583,11 @@ local function ResolveNpcFilterMenu()
     end
     local background = CreateSolid(menu, "BACKGROUND",
         FLAT_BACKGROUND[1], FLAT_BACKGROUND[2], FLAT_BACKGROUND[3], 0.94)
-    if background and type(background.SetAllPoints) == "function" then
-        pcall(background.SetAllPoints, background, menu)
+    if background and type(background.SetPoint) == "function" then
+        pcall(background.SetPoint, background, "TOPLEFT", menu, "TOPLEFT", 1.5, -1.5)
+        pcall(background.SetPoint, background, "BOTTOMRIGHT", menu, "BOTTOMRIGHT", -2.5, 2.5)
     end
-    BuildFlatBorder(menu)
+    ModernTheme.BuildThinBorder(menu)
     pcall(menu.Hide, menu)
     npcFilterMenu = menu
     return menu
@@ -17309,12 +17674,24 @@ local function GetNpcFilterRow(index)
         pcall(button.RegisterForClicks, button, "LeftButtonUp")
     end
 
-    local checkMark = CreateSolid(button, "OVERLAY",
-        PQ.colors.accent[1], PQ.colors.accent[2], PQ.colors.accent[3], 1)
+    local checkbox = CreateSolid(button, "ARTWORK", 1, 1, 1, 1)
+    if checkbox then
+        pcall(checkbox.SetTexture, checkbox, ModernTheme.texture)
+        pcall(checkbox.SetTexCoord, checkbox, ModernTheme.box[1], ModernTheme.box[2],
+            ModernTheme.box[3], ModernTheme.box[4])
+        pcall(checkbox.SetPoint, checkbox, "LEFT", button, "LEFT", NPC_FILTER_CHECKBOX_LEFT, 0)
+        pcall(checkbox.SetWidth, checkbox, ModernTheme.width)
+        pcall(checkbox.SetHeight, checkbox, ModernTheme.height)
+        button.pandaQuestCheckBox = checkbox
+    end
+    local checkMark = CreateSolid(button, "OVERLAY", 1, 1, 1, 1)
     if checkMark then
-        pcall(checkMark.SetPoint, checkMark, "LEFT", button, "LEFT", 4, 0)
-        pcall(checkMark.SetWidth, checkMark, NPC_FILTER_TRACK_MARK_WIDTH)
-        pcall(checkMark.SetHeight, checkMark, NPC_FILTER_TRACK_MARK_HEIGHT)
+        pcall(checkMark.SetTexture, checkMark, ModernTheme.texture)
+        pcall(checkMark.SetTexCoord, checkMark, ModernTheme.tick[1], ModernTheme.tick[2],
+            ModernTheme.tick[3], ModernTheme.tick[4])
+        pcall(checkMark.SetPoint, checkMark, "LEFT", button, "LEFT", NPC_FILTER_CHECKBOX_LEFT, 0)
+        pcall(checkMark.SetWidth, checkMark, ModernTheme.width)
+        pcall(checkMark.SetHeight, checkMark, ModernTheme.height)
         pcall(checkMark.Hide, checkMark)
         button.pandaQuestCheckMark = checkMark
     end
@@ -19249,21 +19626,26 @@ Client.QUEST_DIALOGUE_BASE_FONT_UNIT = Client.QUEST_DIALOGUE_FONT_UNIT
 -- further 20% bigger than Alliance V2 (user request). SetScale cannot
 -- stand in (see above), so every dialogue object retains its design geometry
 -- and that geometry is reapplied when the active theme changes.
-Client.QUEST_DIALOGUE_THEME_SCALE = { ["alliance"] = 1.296, ["horde"] = 1.5552 }
+-- Minimal is 20% bigger than its first size, text included (user request,
+-- 2026-10-30): QUEST_DIALOGUE_THEME_FONT_SCALE scales its labels' fonts too.
+Client.QUEST_DIALOGUE_THEME_SCALE = { ["alliance"] = 1.296, ["horde"] = 1.5552,
+    ["minimal"] = 1.2 }
+Client.QUEST_DIALOGUE_THEME_FONT_SCALE = { ["minimal"] = 1.2 }
 Client.QUEST_DIALOGUE_GEOMETRY = {}
 
 function Client.GetQuestDialogueThemeScale(theme)
     return Client.QUEST_DIALOGUE_THEME_SCALE[theme or ""] or 1
 end
 
--- Sets the frame unit for `theme`, never the font unit, and records it as
--- the theme the card is built for (its portrait hole); called before
--- Client.CreateQuestDialogueFrame.
+-- Sets the frame and font units for `theme` (the font unit stays at its base
+-- unless the theme has a font scale) and records it as the theme the card is
+-- built for (its portrait hole); called before Client.CreateQuestDialogueFrame.
 function Client.ApplyQuestDialogueThemeScale(theme)
     local scale = Client.GetQuestDialogueThemeScale(theme)
     Client.QUEST_DIALOGUE_BUILD_THEME = theme
     Client.QUEST_DIALOGUE_UNIT = Client.QUEST_DIALOGUE_BASE_UNIT * scale
     Client.QUEST_DIALOGUE_FONT_UNIT = Client.QUEST_DIALOGUE_BASE_FONT_UNIT
+        * (Client.QUEST_DIALOGUE_THEME_FONT_SCALE[theme or ""] or 1)
     return scale
 end
 
@@ -19387,6 +19769,8 @@ function Client.ScaleQuestDialogueFont(label, size)
     end
     local designSize = type(size) == "number" and size
         or label.pandaQuestDefaultFontDesignSize
+    -- Kept for Client.RescaleQuestDialogueFonts when the font unit changes.
+    label.pandaQuestFontDesignSize = designSize
     local height = math.floor(designSize * Client.QUEST_DIALOGUE_FONT_UNIT + 0.5)
     if height < 6 then height = 6 end
     if label.pandaQuestFont and type(label.pandaQuestFont.SetFont) == "function"
@@ -19402,6 +19786,58 @@ function Client.ScaleQuestDialogueFont(label, size)
     end
     if not pcall(label.SetFontObject, label, font) then return false end
     label.pandaQuestFont = font
+    fonts.labels = fonts.labels or {}
+    table.insert(fonts.labels, label)
+    return true
+end
+
+-- Redraws every label on its own Font at its last design size in the current
+-- font unit; called when a theme change moves the unit.
+function Client.RescaleQuestDialogueFonts()
+    local labels = Client.QUEST_DIALOGUE_FONT.labels or {}
+    local index = 1
+    while index <= table.getn(labels) do
+        local label = labels[index]
+        if type(label.pandaQuestFontDesignSize) == "number" then
+            Client.ScaleQuestDialogueFont(label, label.pandaQuestFontDesignSize)
+        end
+        index = index + 1
+    end
+end
+
+-- Draws the wrapped objectives label at `size` design units (FONT_UNIT of
+-- them in pixels) through FontString:SetFont on its own face, never a named
+-- Font, which centres wrapped lines here (Client.CreateQuestDialogueFrame's
+-- Label). nil puts its template's face back. The face is kept on the label
+-- (pandaQuestObjectiveFace) so its width is measured at the same size
+-- (Client.MeasureQuestDialogueLabelWidth).
+function Client.SizeQuestDialogueObjectiveFace(label, size)
+    if not label or type(label.SetFont) ~= "function" then return false end
+    if type(size) ~= "number" then
+        if not label.pandaQuestObjectiveFace then return false end
+        label.pandaQuestObjectiveFace = nil
+        local template = Resolve("GameFontNormalSmall")
+        if template and type(label.SetFontObject) == "function" then
+            pcall(label.SetFontObject, label, template)
+        end
+        return true
+    end
+    -- The stock face, never the bundled language face (Client.FitFontToText
+    -- puts that back on for text that needs it when the text is set).
+    local path = Client.QUEST_DIALOGUE_FONT.fallbackPath
+    local face = label.pandaQuestObjectiveFace
+    if face then
+        path = face.path
+    elseif type(label.GetFont) == "function" then
+        local ok, readPath = pcall(label.GetFont, label)
+        if ok and type(readPath) == "string" and readPath ~= Client.LANGUAGE_FONT_PATH then
+            path = readPath
+        end
+    end
+    local height = math.floor(size * Client.QUEST_DIALOGUE_FONT_UNIT + 0.5)
+    local ok, accepted = pcall(label.SetFont, label, path, height)
+    if not ok or accepted == false then return false end
+    label.pandaQuestObjectiveFace = { path = path, height = height }
     return true
 end
 
@@ -19506,6 +19942,28 @@ function Client.FitQuestDialogueLabel(label, box, sourceText)
     return true
 end
 
+-- Drops every label's fitted text and width, so the next
+-- FitQuestDialogueLabel lays it out again: a theme change that moves the
+-- units resets each label to its design box (Client.RescaleQuestDialogueGeometry)
+-- and changes how wide its text draws, while the same text at the same limit
+-- would otherwise skip the fit and keep the design width.
+function Client.ForgetQuestDialogueFits()
+    local function Forget(objects)
+        local index = 1
+        while index <= table.getn(objects or {}) do
+            local label = objects[index]
+            if label then
+                label.pandaQuestFitText = nil
+                label.pandaQuestFitLimit = nil
+                label.pandaQuestSettledWidth = nil
+            end
+            index = index + 1
+        end
+    end
+    Forget(Client.QUEST_DIALOGUE_GEOMETRY)
+    Forget(Client.QUEST_DIALOGUE_FONT.labels)
+end
+
 -- The first `bytes` bytes of `text`, backed off to a UTF-8 character start.
 function Client.CutQuestDialogueText(text, bytes)
     if bytes >= string.len(text) then return text end
@@ -19553,6 +20011,14 @@ function Client.SettleQuestDialogueLabels()
                 if label.pandaQuestFitWraps then
                     if width < limit then Client.SetObjectSize(label, width) end
                 elseif width < limit or type(full) ~= "string" or type(shown) ~= "string" then
+                    -- pandaQuestFitPad: extra pixels a label keeps past its
+                    -- measure, within its box, where the client cut a hugged
+                    -- name short ("Vel'rin Fa...", user report, 2026-10-30).
+                    local pad = label.pandaQuestFitPad
+                    if type(pad) == "number" and pad > 0 then
+                        width = width + pad
+                        if width > limit then width = limit end
+                    end
                     Client.SetObjectSize(label, width)
                     -- The width the client really draws the text at, read a
                     -- frame after its text was set: what a card sized to its
@@ -19928,11 +20394,17 @@ Client.QUEST_DIALOGUE_MINIMAL = {
     HEIGHT = 150,
     -- The quest card: header, two objective lines, the reward icon row, the
     -- reward summary, and the buttons on its bottom border; REWARD_ROW_DROP
-    -- taller for the gap over the icon row.
-    TALL_HEIGHT = 190 + 5 / Client.QUEST_DIALOGUE_BASE_UNIT,
+    -- taller for the gap over the icon row, BUTTON_DROP for the one over the
+    -- buttons.
+    TALL_HEIGHT = 190 + 5 / Client.QUEST_DIALOGUE_BASE_UNIT
+        + 5 / (Client.QUEST_DIALOGUE_BASE_UNIT * Client.QUEST_DIALOGUE_THEME_SCALE.minimal),
     -- 5 pixels between the objectives and the reward icon row (user request,
     -- 2026-10-20); the summary and the buttons under it move down as much.
     REWARD_ROW_DROP = 5 / Client.QUEST_DIALOGUE_BASE_UNIT,
+    -- 5 pixels, at the theme's scale, between the reward summary and the
+    -- Cancel / Complete buttons (user request, 2026-10-30); the card's bottom
+    -- border, which the buttons straddle, moves down as much.
+    BUTTON_DROP = 5 / (Client.QUEST_DIALOGUE_BASE_UNIT * Client.QUEST_DIALOGUE_THEME_SCALE.minimal),
     SLICE_OUTSET = 0,
     ELEMENTS_GAP = 10,
     ELEMENTS_PAD = 14,
@@ -20791,6 +21263,9 @@ Client.QUEST_DIALOGUE_LAYOUTS.minimal = Client.CopyQuestDialogueLayout(
         openSlideTime = 0.2,
         role = { 76, 37, 420, 16 },
         speaker = { 76, 15, 420, 20 },
+        -- The NPC name and quest title keep 20 units past their measured
+        -- width: the client cut a hugged name short (user report, 2026-10-30).
+        headerFitPad = 20,
         speakerSize = 14,
         title = { 76, 37, 420, 18 },
         titleSize = 12,
@@ -20871,13 +21346,18 @@ Client.QUEST_DIALOGUE_LAYOUTS.minimal = Client.CopyQuestDialogueLayout(
             -- Two lines need the full 40: at 28 the client dropped the second
             -- line (user report, 2026-10-12). The reward row starts under it.
             objective = { 12, 80, 550, 40 },
+            -- The objective text at the heading's size, larger than its
+            -- template's (user request, 2026-10-30;
+            -- Client.SizeQuestDialogueObjectiveFace).
+            objectiveSize = 12,
             -- An objective on one line leaves the box's second line empty:
             -- everything under it moves up by lineHeight (user request,
             -- 2026-10-12; Client.QuestDialogueObjectiveSlack). `lines` is what
             -- the box holds; `columns` is text's 84 per 676 units scaled to
             -- the 550-unit box (68), rounded down so a nearly full line is
-            -- counted as wrapping rather than lifting the row into it.
-            objectiveFit = { columns = 64, lineHeight = 20, lines = 2 },
+            -- counted as wrapping rather than lifting the row into it. 53:
+            -- those 64 at the template's 10 pixels, drawn at objectiveSize's 12.
+            objectiveFit = { columns = 53, lineHeight = 20, lines = 2 },
             body = { 12, 76, 676, 40 },
             text = { columns = 84, lines = 2 },
             -- The item rewards on one line under the objectives (user
@@ -20912,8 +21392,10 @@ Client.QUEST_DIALOGUE_LAYOUTS.minimal = Client.CopyQuestDialogueLayout(
             -- (user requests, 2026-10-12): flush right where the bottom row
             -- had them, 8 units apart, centred on the border line (6.5 units
             -- up from the card's bottom edge), so half of each hangs below.
-            secondaryButtonCentre = { 500, 184 + Client.QUEST_DIALOGUE_MINIMAL.REWARD_ROW_DROP },
-            actionButtonCentre = { 628, 184 + Client.QUEST_DIALOGUE_MINIMAL.REWARD_ROW_DROP },
+            secondaryButtonCentre = { 500, 184 + Client.QUEST_DIALOGUE_MINIMAL.REWARD_ROW_DROP
+                + Client.QUEST_DIALOGUE_MINIMAL.BUTTON_DROP },
+            actionButtonCentre = { 628, 184 + Client.QUEST_DIALOGUE_MINIMAL.REWARD_ROW_DROP
+                + Client.QUEST_DIALOGUE_MINIMAL.BUTTON_DROP },
         },
         ink = {
             -- "Quest Giver" on the conversation card in the quest card's
@@ -21722,9 +22204,17 @@ function Client.SetQuestDialogueTheme(frame, theme)
     end
     if frame.pandaQuestTheme == theme then return false end
     local previousUnit = Client.QUEST_DIALOGUE_UNIT
+    local previousFontUnit = Client.QUEST_DIALOGUE_FONT_UNIT
     Client.ApplyQuestDialogueThemeScale(theme)
     if previousUnit ~= Client.QUEST_DIALOGUE_UNIT then
         Client.RescaleQuestDialogueGeometry()
+    end
+    if previousFontUnit ~= Client.QUEST_DIALOGUE_FONT_UNIT then
+        Client.RescaleQuestDialogueFonts()
+    end
+    if previousUnit ~= Client.QUEST_DIALOGUE_UNIT
+        or previousFontUnit ~= Client.QUEST_DIALOGUE_FONT_UNIT then
+        Client.ForgetQuestDialogueFits()
     end
     frame.pandaQuestTheme = theme
     -- A theme switched with the card up takes its own veil at once.
@@ -21981,7 +22471,14 @@ function Client.LayQuestDialogueCard(frame)
             box[1], -(box[2] + (drop or 0)))
     end
     PlaceDropped(speaker, layout.speaker, layout.speakerDrop or layout.headerDrop)
-    if speaker then speaker.pandaQuestFitText = nil end
+    -- `headerFitPad`: design units the name and title keep past their
+    -- measured width (Client.SettleQuestDialogueLabels).
+    local headerPad = (layout.headerFitPad or 0) * Client.QUEST_DIALOGUE_UNIT
+    if speaker then
+        speaker.pandaQuestFitText = nil
+        speaker.pandaQuestFitPad = headerPad
+    end
+    if title then title.pandaQuestFitPad = headerPad end
     -- The role hugs its text (Client.FitQuestDialogueLabel); a new box makes
     -- it fit afresh.
     local role = frame.pandaQuestCineRole
@@ -22051,6 +22548,8 @@ function Client.LayQuestDialogueCard(frame)
             Client.ScaleQuestDialogueFont(frame.pandaQuestCineObjectiveHeading,
                 layout.objectiveHeadingSize)
         end
+        Client.SizeQuestDialogueObjectiveFace(frame.pandaQuestCineObjective,
+            layout.objectiveSize)
     end
     -- The one-line reward summary, on a card with a rewardLine box only
     -- (RenderQuestDialogue shows it per page).
@@ -24418,7 +24917,11 @@ end
 function Client.MeasureQuestDialogueLabelWidth(frame, label, text, template)
     if type(text) ~= "string" or text == "" then return 0 end
     local font = label and label.pandaQuestFont
+    -- A label on its own face (Client.SizeQuestDialogueObjectiveFace) is
+    -- measured on a FontString given the same face.
+    local face = not font and label and label.pandaQuestObjectiveFace
     local key = font and "\031scaled" or template
+    if face then key = "\031face" .. face.path .. face.height end
     if not frame or not label or not key then return nil end
     frame.pandaQuestWidthMeasures = frame.pandaQuestWidthMeasures or {}
     local measure = frame.pandaQuestWidthMeasures[key]
@@ -24429,6 +24932,10 @@ function Client.MeasureQuestDialogueLabelWidth(frame, label, text, template)
         if not made or not created then return nil end
         measure = created
         Client.HideObject(measure)
+        if face and (type(measure.SetFont) ~= "function"
+            or not pcall(measure.SetFont, measure, face.path, face.height)) then
+            return nil
+        end
         frame.pandaQuestWidthMeasures[key] = measure
     end
     if font and (type(measure.SetFontObject) ~= "function"

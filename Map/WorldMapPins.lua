@@ -1099,6 +1099,8 @@ local function FilterAvailableQuestIds(questIds, activeQuestIds, questHistory, e
     while index <= total do
         local questId = questIds[index]
         local lowLevel = eligibility and eligibility:IsLowLevel(questId)
+        -- Too-high quests stay visible, so they only join the grey count.
+        local grey = lowLevel or (eligibility and eligibility:IsTooHighLevel(questId))
         if type(questId) == "number" and (not lowLevel or showLowLevel)
             and not activeQuestIds[questId]
             and not (questHistory and questHistory:IsDone(questId))
@@ -1106,7 +1108,7 @@ local function FilterAvailableQuestIds(questIds, activeQuestIds, questHistory, e
                 and not eligibility:IsOfferable(questId, activeQuestIds, questHistory))
             and not IsQuestMapHidden(config, questId) then
             table.insert(out, questId)
-            if lowLevel then
+            if grey then
                 lowLevelCount = lowLevelCount + 1
             end
         end
@@ -4910,13 +4912,20 @@ function WorldMapPins:MarkPass(kind)
     end
 end
 
+-- True only when the map is known to be closed: the game UI is visible (the
+-- fullscreen map hides it) and the windowed map, a UIParent child that leaves
+-- it visible, is not open either. Without the second test a quest completed
+-- with the windowed map open stayed drawn until the map was reopened.
+function WorldMapPins:IsMapOffscreen()
+    return Client.IsGameUIHidden() == false
+        and not Client.IsWindowedWorldMapOpen()
+end
+
 -- Invalidates map topology without making the closed world map do the work.
--- UIParent being visible is the observed off-screen signal already used by
--- ReapplyVisiblePools. A nil answer keeps the old eager behaviour, so an
--- unavailable signal can delay nothing.
+-- A nil visibility answer keeps the old eager behaviour, so an unavailable
+-- signal can delay nothing.
 function WorldMapPins:InvalidateScene()
-    local hidden = Client.IsGameUIHidden()
-    if hidden == false then
+    if self:IsMapOffscreen() then
         self.pendingSceneDirty = true
         return
     end
@@ -5119,11 +5128,10 @@ function WorldMapPins:Refresh()
     local signature = ViewSignature(areaId or ("continent" .. continentId), report)
     local bagSignature = RelevantBagSignature(self.relevantBagItemIds)
     if self.pendingSceneDirty then
-        local hidden = Client.IsGameUIHidden()
         -- A real view/config change still has to be applied: it may be the map
         -- opening or the player deliberately changing its presentation. Only
         -- a model invalidation against the same hidden scene is deferred.
-        if hidden == false and not self.dirty
+        if self:IsMapOffscreen() and not self.dirty
             and (not self.lastSignature or signature == self.lastSignature) then
             self:MarkPass("skip:offscreenDirty")
             return
@@ -5136,7 +5144,7 @@ function WorldMapPins:Refresh()
     -- an unrelated bag item is absent from this signature altogether.
     if not self.dirty and signature == self.lastSignature
         and bagSignature ~= self.lastBagSignature
-        and Client.IsGameUIHidden() == false then
+        and self:IsMapOffscreen() then
         self.pendingSceneDirty = true
         self:MarkPass("skip:offscreenBagChange")
         return

@@ -487,12 +487,24 @@ function GearAdvisor:Evaluate(rewards, spec, readLines)
     end
 
     -- The coin only means something as a comparison: every choice must have
-    -- a price, or none is marked.
+    -- a price, or none is marked. A name shared by differently priced items
+    -- is narrowed to the on-screen quest's own choice IDs.
     local database = PQ:GetModule("Database")
     local highest = nil
+    local choiceIds = nil
     index = 1
     while index <= total do
         local price = database and database:GetItemSellPriceByName(rewards[index].name)
+        if price == nil and database and database.itemNameIndexReady then
+            if choiceIds == nil then
+                local match = PQ:GetModule("QuestMatch")
+                local questId = match and match:ResolveGiverQuestId()
+                choiceIds = database:GetQuestChoiceItems(questId) or false
+            end
+            if choiceIds then
+                price = database:GetItemSellPriceByName(rewards[index].name, choiceIds)
+            end
+        end
         rewards[index].price = price
         if price == nil then
             highest = nil

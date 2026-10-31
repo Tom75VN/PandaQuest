@@ -53,9 +53,11 @@ local SETTINGS_MASCOT_INSET = 8
 -- The submenu's pages, one per section of the page. Under a settings group
 -- TAB_ID names the group, and these name the rows inside it.
 local GENERAL_PAGE_ID = TAB_ID .. ".general"
+local HUD_PAGE_ID = TAB_ID .. ".hud"
 local DIALOGUE_PAGE_ID = TAB_ID .. ".dialogue"
 local MOBS_PAGE_ID = TAB_ID .. ".mobs"
 local SERVER_PAGE_ID = TAB_ID .. ".server"
+local HUD_MARKER_SETTINGS_VISIBLE = PQ:IsFeatureEnabled("hudWorldMarker")
 
 -- The page's own first line: "Panda Quest" in the addon's two-tone wordmark,
 -- with the running version after it. The split is the one the TOC Title already
@@ -224,10 +226,9 @@ local INTERNAL_TAB_HEIGHT = 20
 -- Tab height, its 2px gap, and a 5px margin under the strip so the first
 -- control of either tab does not sit against the row of tabs.
 local INTERNAL_TAB_ADVANCE = 27
--- One width per tab, the widest label of the four languages each: four tabs and
--- their 6px gaps fill the page's text width.
+-- One width per tab, sized for the widest label in the four languages.
 local INTERNAL_TAB_WIDTHS = {
-    general = 60, dialogue = 91, mobs = 96, server = 58,
+    general = 60, hud = 44, dialogue = 91, mobs = 96, server = 58,
 }
 local INTERNAL_TAB_GAP = 6
 local MOB_MIN_ROWS_PER_PAGE = 9
@@ -285,6 +286,7 @@ local MOB_PAGER_HEIGHT = 22
 -- row, matching what page.Body advances for `reservedLines = 1`.
 local MOB_STATUS_ADVANCE = BODY_LINE_HEIGHT + 4
 local MOB_BOTTOM_MARGIN = 4
+local OPTIONAL_STATUS_ADVANCE = 106
 
 -- Average glyph width for the small font, used ONLY when the client will not
 -- report a laid-out FontString's height. Deliberately narrow, so the estimate
@@ -427,6 +429,57 @@ local function NewPage(parent)
         local region = page.Add(Client.CreateSettingsRule(page.parent, 0, page.y, TEXT_WIDTH))
         page.y = page.y - RULE_ADVANCE
         return region
+    end
+
+    -- Optional client component status. pandaUI supplies the same public
+    -- component used for its Nampower status; the standalone page keeps an
+    -- equivalent text fallback so PandaQuest never depends on pandaUI.
+    page.OptionalStatus = function(options)
+        options = options or {}
+        local createStatus = HostComponent("CreateOptionalStatusSection")
+        if createStatus then
+            local control, refresh = createStatus(page.parent, {
+                header = options.header,
+                name = options.name,
+                note = options.note,
+                detectedText = options.detectedText,
+                missingText = options.missingText,
+                detected = options.detected,
+                width = TEXT_WIDTH,
+                y = page.y,
+            })
+            if control then
+                page.Add(control)
+                page.y = page.y - OPTIONAL_STATUS_ADVANCE
+                page.Sync(refresh)
+                return control
+            end
+        end
+
+        page.Heading(options.header or "")
+        page.Body(options.name or "")
+        local status = page.Body("")
+        page.Body(options.note or "", NOTE_INDENT, 2)
+        page.Rule()
+        local function RefreshStatus()
+            local detected, detail = false, nil
+            if type(options.detected) == "function" then
+                detected, detail = options.detected()
+            end
+            local text = detected and (options.detectedText or "")
+                or (options.missingText or "")
+            if detected and detail and detail ~= "" then
+                text = text .. " v" .. tostring(detail)
+            end
+            if detected then
+                text = "|cff5cd647" .. text .. "|r"
+            else
+                text = "|cffe64038" .. text .. "|r"
+            end
+            Client.SetSettingsBodyText(status, text)
+        end
+        page.Sync(RefreshStatus)
+        return status
     end
 
     -- One option. `key` is both the stored setting and the source of the widget
@@ -1038,6 +1091,24 @@ local function BuildGeneralSection(page)
         { left = PAIR_COLUMN_RIGHT, width = rightWidth, advance = CHECKBOX_ADVANCE })
 end
 
+local function BuildHUDSection(page)
+    page.Gap(TAB_TOP_GAP)
+    page.OptionalStatus({
+        header = PQ.L("SETTINGS_CLASSICAPI_HEADER"),
+        name = "ClassicAPI",
+        note = PQ.L("SETTINGS_CLASSICAPI_HINT"),
+        detectedText = PQ.L("SETTINGS_CLASSICAPI_DETECTED"),
+        missingText = PQ.L("SETTINGS_CLASSICAPI_NOT_DETECTED"),
+        detected = Client.GetClassicAPIStatus,
+    })
+    local marker = page.Checkbox("waypointEnabled", PQ.L("SETTINGS_HUD_MARKER"),
+        PQ.L("SETTINGS_HUD_MARKER_NOTE"))
+    page.Sync(function()
+        local detected = Client.GetClassicAPIStatus()
+        page.SetCheckboxEnabled(marker, detected and true or false)
+    end)
+end
+
 -- The Quest dialogue section: every option of the immersive dialogue, on a
 -- page of its own so its controls no longer compete with General's fixed box
 -- for a line. The theme is a dropdown: the theme choices as radio rows took a
@@ -1428,7 +1499,11 @@ function Settings:BuildPage(parent, section)
     if not parent then
         return {}, nil
     end
-    if section ~= "general" and section ~= "dialogue" and section ~= "mobs"
+    if section == "hud" and not HUD_MARKER_SETTINGS_VISIBLE then
+        section = "general"
+    end
+    if section ~= "general" and section ~= "hud"
+        and section ~= "dialogue" and section ~= "mobs"
         and section ~= "server" then
         section = nil
     end
@@ -1445,10 +1520,11 @@ function Settings:BuildPage(parent, section)
         self.liveSliders = {}
     end
     local generalWidgets = {}
+    local hudWidgets = {}
     local dialogueWidgets = {}
     local mobWidgets = {}
     local serverWidgets = {}
-    local generalTab, dialogueTab, mobTab, serverTab
+    local generalTab, hudTab, dialogueTab, mobTab, serverTab
     local RefreshMobResults, mobSearchInput
 
     -- The page draws no wordmark heading of its own: both hosts already title
@@ -1477,15 +1553,19 @@ function Settings:BuildPage(parent, section)
     end
 
     local function ApplyInternalTab(tab)
-        if tab ~= "mobs" and tab ~= "dialogue" and tab ~= "server" then
+        if (tab == "hud" and not HUD_MARKER_SETTINGS_VISIBLE)
+            or (tab ~= "hud" and tab ~= "mobs"
+                and tab ~= "dialogue" and tab ~= "server") then
             tab = "general"
         end
         Settings.activePageTab = tab
         ShowGroup(generalWidgets, tab == "general")
+        ShowGroup(hudWidgets, tab == "hud")
         ShowGroup(dialogueWidgets, tab == "dialogue")
         ShowGroup(mobWidgets, tab == "mobs")
         ShowGroup(serverWidgets, tab == "server")
         Client.SetSettingsTabSelected(generalTab, tab == "general")
+        Client.SetSettingsTabSelected(hudTab, tab == "hud")
         Client.SetSettingsTabSelected(dialogueTab, tab == "dialogue")
         Client.SetSettingsTabSelected(mobTab, tab == "mobs")
         Client.SetSettingsTabSelected(serverTab, tab == "server")
@@ -1505,6 +1585,9 @@ function Settings:BuildPage(parent, section)
             return tab
         end
         generalTab = AddInternalTab("general", "generalTab", "SETTINGS_TAB_GENERAL")
+        if HUD_MARKER_SETTINGS_VISIBLE then
+            hudTab = AddInternalTab("hud", "hudTab", "SETTINGS_TAB_HUD")
+        end
         dialogueTab = AddInternalTab("dialogue", "dialogueTab", "SETTINGS_TAB_DIALOGUE")
         mobTab = AddInternalTab("mobs", "mobTrackingTab", "SETTINGS_TAB_MOB_TRACKING")
         serverTab = AddInternalTab("server", "serverTab", "SETTINGS_TAB_IMPORT")
@@ -1517,6 +1600,14 @@ function Settings:BuildPage(parent, section)
         page.Group(generalWidgets)
         BuildGeneralSection(page)
         generalHeight = -page.y
+    end
+
+    local hudHeight = 0
+    if HUD_MARKER_SETTINGS_VISIBLE and (not section or section == "hud") then
+        page.Group(hudWidgets)
+        page.y = contentTop
+        BuildHUDSection(page)
+        hudHeight = -page.y
     end
 
     local dialogueHeight = 0
@@ -1546,7 +1637,8 @@ function Settings:BuildPage(parent, section)
 
     -- Each open also records which section the player is on, so /pq config
     -- returns to it under either host.
-    if section == "general" or section == "dialogue" or section == "server" then
+    if section == "general" or section == "hud"
+        or section == "dialogue" or section == "server" then
         page.Sync(function()
             Settings.activePageTab = section
         end)
@@ -1567,6 +1659,9 @@ function Settings:BuildPage(parent, section)
     -- canvas shows a scroll bar, so an overflow there is not cut off.
     local availableHeight, hostScrolls = AvailableHeight(parent)
     self.pageHeight = generalHeight
+    if hudHeight > self.pageHeight then
+        self.pageHeight = hudHeight
+    end
     if dialogueHeight > self.pageHeight then
         self.pageHeight = dialogueHeight
     end
@@ -1612,8 +1707,7 @@ end
 -- Host resolution -----------------------------------------------------------
 
 -- Once. Where pandaUI has settings groups, PandaQuest is an "PandaQuest"
--- submenu in its sidebar with one page per section (General, Quest dialogue,
--- Mob tracking, Import) --
+-- submenu in its sidebar with one page per visible section --
 -- the sidebar rows replace the internal tab strip. An pandaUI without
 -- RegisterSettingsGroup gets the whole tabbed page as a single row instead.
 -- The guard means a re-entered resolution cannot file a duplicate id and get
@@ -1655,11 +1749,21 @@ function Settings:RegisterWithPandaUI(host)
             function(content)
                 return Settings:BuildPage(content, "general")
             end, { parent = TAB_ID, after = TAB_ID })
+        local okHud, hud = true, true
+        local dialogueAfter = GENERAL_PAGE_ID
+        if HUD_MARKER_SETTINGS_VISIBLE then
+            okHud, hud = pcall(host.RegisterSettingsTab, HUD_PAGE_ID,
+                PQ.L("SETTINGS_TAB_HUD"),
+                function(content)
+                    return Settings:BuildPage(content, "hud")
+                end, { parent = TAB_ID, after = GENERAL_PAGE_ID })
+            dialogueAfter = HUD_PAGE_ID
+        end
         local okDialogue, dialogue = pcall(host.RegisterSettingsTab, DIALOGUE_PAGE_ID,
             PQ.L("SETTINGS_TAB_DIALOGUE"),
             function(content)
                 return Settings:BuildPage(content, "dialogue")
-            end, { parent = TAB_ID, after = GENERAL_PAGE_ID })
+            end, { parent = TAB_ID, after = dialogueAfter })
         local okMobs, mobs = pcall(host.RegisterSettingsTab, MOBS_PAGE_ID,
             PQ.L("SETTINGS_TAB_MOB_TRACKING"),
             function(content)
@@ -1670,7 +1774,8 @@ function Settings:RegisterWithPandaUI(host)
             function(content)
                 return Settings:BuildPage(content, "server")
             end, { parent = TAB_ID, after = MOBS_PAGE_ID })
-        if not okGeneral or not general or not okDialogue or not dialogue
+        if not okGeneral or not general or not okHud or not hud
+            or not okDialogue or not dialogue
             or not okMobs or not mobs or not okServer or not serverPage then
             return false
         end
@@ -1714,9 +1819,7 @@ function Settings:ResolveHost(force)
             PQ:DeclareCapability("pandaUISettingsHost", "detected",
                 "pandaUI was found at runtime and accepted PandaQuest's options page "
                 .. (self.hostLayout == "group"
-                    and ("as a submenu (U.RegisterSettingsGroup '" .. TAB_ID .. "', pages '"
-                        .. GENERAL_PAGE_ID .. "', '" .. DIALOGUE_PAGE_ID .. "', '"
-                        .. MOBS_PAGE_ID .. "' and '" .. SERVER_PAGE_ID .. "')")
+                    and ("as a submenu (U.RegisterSettingsGroup '" .. TAB_ID .. "')")
                     or ("(U.RegisterSettingsTab, id '" .. TAB_ID .. "')"))
                 .. ". The page is drawn inside "
                 .. "pandaUI's settings window; /pq config opens it there. Detected by type-checking "
@@ -2091,7 +2194,9 @@ function Settings:Open()
             local pageId = TAB_ID
             if self.hostLayout == "group" then
                 pageId = GENERAL_PAGE_ID
-                if self.activePageTab == "mobs" then
+                if HUD_MARKER_SETTINGS_VISIBLE and self.activePageTab == "hud" then
+                    pageId = HUD_PAGE_ID
+                elseif self.activePageTab == "mobs" then
                     pageId = MOBS_PAGE_ID
                 elseif self.activePageTab == "dialogue" then
                     pageId = DIALOGUE_PAGE_ID

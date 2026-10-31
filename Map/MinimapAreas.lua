@@ -15,12 +15,14 @@ THE SAME SHAPES. The geometry is Map/AreaContours.lua's, read from its cache
 yards once per rebuild; each refresh only turns yards into pixels around the
 player, the same arithmetic MinimapPins:Project uses for the dots.
 
-CLIPPED TO THE CIRCLE. Nothing clips a child of Minimap on this client
+CLIPPED TO THE MINIMAP SHAPE. Nothing clips a child of Minimap on this client
 (minimap.addon_children_render_unclipped), so a patch left as computed would
 be drawn over the rest of the UI. There is no mask to lean on, so every patch
-is clipped to the minimap circle here, before it is placed:
-  * a patch entirely outside the circle is not drawn;
+is clipped here before it is placed. PandaUI's public Circle/Square setting
+selects a rectangle or the established circle:
+  * a patch entirely outside is not drawn;
   * a patch entirely inside is drawn as it is;
+  * a patch crossing a square edge is trimmed to that rectangle;
   * a patch crossing the rim is cut into horizontal strips at most STRIP_HEIGHT
     pixels tall, and each strip is trimmed to the circle's chord at the strip's
     OUTER edge -- the narrowest chord inside the strip -- so no strip can reach
@@ -289,11 +291,40 @@ end
 -- player; the texture is placed around the origin, `shiftX`/`shiftY` pixels
 -- from the player (zero without an origin). Returns the next free strip.
 function MinimapAreas:DrawRecord(used, record, playerX, playerY, pixelsPerYard,
-    radius, path, red, green, blue, origin, shiftX, shiftY)
+    radius, square, halfWidth, halfHeight, path, red, green, blue, origin,
+    shiftX, shiftY)
     local left = (record[1] - playerX) * pixelsPerYard
     local right = (record[3] - playerX) * pixelsPerYard
     local top = -(record[2] - playerY) * pixelsPerYard
     local bottom = -(record[4] - playerY) * pixelsPerYard
+    local u1, u2 = record[5], record[6]
+    if square then
+        local clipLeft = math.max(left, -halfWidth)
+        local clipRight = math.min(right, halfWidth)
+        local clipTop = math.min(top, halfHeight)
+        local clipBottom = math.max(bottom, -halfHeight)
+        if clipRight <= clipLeft or clipTop <= clipBottom then
+            return used
+        end
+        if clipLeft == left and clipRight == right
+            and clipTop == top and clipBottom == bottom then
+            if origin then
+                left = record[1] * pixelsPerYard
+                right = record[3] * pixelsPerYard
+                top = -record[2] * pixelsPerYard
+                bottom = -record[4] * pixelsPerYard
+            end
+            self:PlaceRecord(record, left, top, right, bottom, path, red, green,
+                blue, origin)
+            return used
+        end
+        local width = right - left
+        local stripU1 = u1 + (u2 - u1) * (clipLeft - left) / width
+        local stripU2 = u1 + (u2 - u1) * (clipRight - left) / width
+        return self:PlaceStrip(used, clipLeft + shiftX, clipTop + shiftY,
+            clipRight + shiftX, clipBottom + shiftY, stripU1, stripU2, path,
+            red, green, blue, origin)
+    end
     local r2 = radius * radius
     -- Nearest point of the rectangle to the centre: outside the circle means
     -- nothing of it is visible.
@@ -303,7 +334,6 @@ function MinimapAreas:DrawRecord(used, record, playerX, playerY, pixelsPerYard,
     if nearX * nearX + nearY * nearY >= r2 then
         return used
     end
-    local u1, u2 = record[5], record[6]
     local farX = math.max(math.abs(left), math.abs(right))
     local farY = math.max(math.abs(top), math.abs(bottom))
     if farX * farX + farY * farY <= r2 then
@@ -384,9 +414,18 @@ end
 -- changed and the player has moved less than MOVE_PIXELS since the last clip,
 -- which is most refreshes, walking or not.
 function MinimapAreas:Project(playerX, playerY, pixelsPerYard, halfSize,
-    owner, mainQuest, showAll, origin)
+    owner, mainQuest, showAll, origin, width, height)
     local radius = halfSize - EDGE_MARGIN
-    if radius <= 0 or table.getn(self.entries) == 0 then
+    local square = Client.IsMinimapSquare()
+    local halfWidth, halfHeight = radius, radius
+    if square then
+        width = width or halfSize * 2
+        height = height or halfSize * 2
+        halfWidth, halfHeight = Client.GetMinimapClipBounds(width, height,
+            EDGE_MARGIN, true)
+    end
+    if radius <= 0 or halfWidth <= 0 or halfHeight <= 0
+        or table.getn(self.entries) == 0 then
         self:HideAll()
         return
     end
@@ -395,7 +434,8 @@ function MinimapAreas:Project(playerX, playerY, pixelsPerYard, halfSize,
     local changed = self:SelectDrawn(owner, mainQuest, showAll)
     if not changed and self.lastProjectKey and self.lastSerial == self.serial
         and self.lastPixelsPerYard == pixelsPerYard and self.lastRadius == radius
-        and self.lastOrigin == (origin or false) then
+        and self.lastSquare == square and self.lastHalfWidth == halfWidth
+        and self.lastHalfHeight == halfHeight and self.lastOrigin == (origin or false) then
         local dx = (playerX - self.lastPlayerX) * pixelsPerYard
         local dy = (playerY - self.lastPlayerY) * pixelsPerYard
         if origin then
@@ -411,6 +451,8 @@ function MinimapAreas:Project(playerX, playerY, pixelsPerYard, halfSize,
     self.lastSerial = self.serial
     self.lastPixelsPerYard = pixelsPerYard
     self.lastRadius = radius
+    self.lastSquare = square
+    self.lastHalfWidth, self.lastHalfHeight = halfWidth, halfHeight
     self.lastOrigin = origin or false
     self.lastPlayerX, self.lastPlayerY = playerX, playerY
 
@@ -419,15 +461,16 @@ function MinimapAreas:Project(playerX, playerY, pixelsPerYard, halfSize,
         shiftX = playerX * pixelsPerYard
         shiftY = -playerY * pixelsPerYard
     end
-    local reach = radius / pixelsPerYard
+    local reachX = halfWidth / pixelsPerYard
+    local reachY = halfHeight / pixelsPerYard
     local used = 1
     local index = 1
     local total = self.drawCount
     while index <= total do
         local entry = self.drawEntries[index]
-        -- The whole quest outside the square around the circle: skip it.
-        if entry.minX and entry.maxX >= playerX - reach and entry.minX <= playerX + reach
-            and entry.maxY >= playerY - reach and entry.minY <= playerY + reach then
+        -- The whole quest outside the active shape's bounding rectangle: skip it.
+        if entry.minX and entry.maxX >= playerX - reachX and entry.minX <= playerX + reachX
+            and entry.maxY >= playerY - reachY and entry.minY <= playerY + reachY then
             local path, red, green, blue = Client.WORLD_MAP_AREA_CONTOUR_TEXTURE, 1, 1, 1
             if self.drawTinted[index] then
                 path = Client.WORLD_MAP_AREA_CONTOUR_NEUTRAL_TEXTURE
@@ -438,7 +481,8 @@ function MinimapAreas:Project(playerX, playerY, pixelsPerYard, halfSize,
             local recordTotal = table.getn(records)
             while recordIndex <= recordTotal do
                 used = self:DrawRecord(used, records[recordIndex], playerX, playerY,
-                    pixelsPerYard, radius, path, red, green, blue, origin, shiftX, shiftY)
+                    pixelsPerYard, radius, square, halfWidth, halfHeight, path,
+                    red, green, blue, origin, shiftX, shiftY)
                 recordIndex = recordIndex + 1
             end
         end

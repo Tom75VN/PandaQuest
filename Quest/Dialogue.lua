@@ -1738,8 +1738,23 @@ function Dialogue:Refresh()
 end
 
 function Dialogue:OnDialogueEvent(event)
+    -- AcceptQuest() has already closed this card in RunAction.  On some
+    -- clients QUEST_ACCEPTED arrives while the native detail fields still
+    -- contain the accepted quest.  It is a state-change notification, not a
+    -- fresh QUEST_DETAIL page: treating it as one cleared `closed` and drew
+    -- the same card again.  Keep the completed action closed; Refresh will
+    -- still observe a later, genuinely opened native page.
+    if event == "QUEST_ACCEPTED" then
+        self.modeHint = nil
+        self.closed = true
+        self:Hide(false)
+        self.lastSignature = nil
+        local acceptedDriver = PQ:GetModule("Driver")
+        if acceptedDriver then acceptedDriver:Wake("quest.dialogue") end
+        return
+    end
     if event == "GOSSIP_SHOW" or event == "QUEST_GREETING"
-        or event == "QUEST_DETAIL" or event == "QUEST_ACCEPTED"
+        or event == "QUEST_DETAIL"
         or event == "QUEST_PROGRESS" or event == "QUEST_COMPLETE" then
         -- The root a pending close waits for is a takeover; the root that
         -- just closed opening again is a new interaction, closed first.
@@ -1765,7 +1780,7 @@ function Dialogue:OnDialogueEvent(event)
     elseif event == "QUEST_GREETING" then
         self.modeHint = "greeting"
         self.closed = nil
-    elseif event == "QUEST_DETAIL" or event == "QUEST_ACCEPTED" then
+    elseif event == "QUEST_DETAIL" then
         self.modeHint = "detail"
         self.closed = nil
     elseif event == "QUEST_PROGRESS" then

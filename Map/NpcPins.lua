@@ -312,19 +312,6 @@ local function Store(key, value)
     return config and config:Set(key, value)
 end
 
--- Pulls a point back onto the minimap rim, keeping its bearing. The bearing is
--- the whole of what a clamped pin still says truthfully, so the offsets are
--- scaled rather than replaced. A point already inside, or exactly on the
--- player, is returned untouched: dividing by that distance is what would put a
--- pin at nan.
-local function ClampToRim(offsetX, offsetY, distance, rim)
-    if distance <= rim or distance <= 0 then
-        return offsetX, offsetY, false
-    end
-    local scale = rim / distance
-    return offsetX * scale, offsetY * scale, true
-end
-
 local function HidePoolFrom(pool, first)
     local index = first
     local total = table.getn(pool)
@@ -1498,22 +1485,20 @@ function NpcPins:DrawMinimap(report, areaId)
     end
 
     local yardsPerPixel = span / width
-    local shortest = width
-    if height < shortest then shortest = height end
+    local square = Client.IsMinimapSquare()
     -- A half-size node may sit a little closer to the rim before its own
     -- edge would cross it, so each size keeps its own cutoff instead of the
     -- larger one hiding small pins early.
-    local limit = shortest / 2 - MINIMAP_PIN_SIZE / 2 - MINIMAP_MARGIN
-    if limit < 0 then limit = 0 end
-    local nodeLimit = shortest / 2 - NODE_MINIMAP_PIN_SIZE / 2 - MINIMAP_MARGIN
-    if nodeLimit < 0 then nodeLimit = 0 end
+    local limitX, limitY = Client.GetMinimapClipBounds(width, height,
+        MINIMAP_PIN_SIZE / 2 + MINIMAP_MARGIN, square)
+    local nodeLimitX, nodeLimitY = Client.GetMinimapClipBounds(width, height,
+        NODE_MINIMAP_PIN_SIZE / 2 + MINIMAP_MARGIN, square)
     -- The rim a clamped tracked pin rests on. Sized for the RING rather than
     -- the pin, because the ring is the larger of the two and is drawn
     -- concentric with it: containing the ring contains both, and nothing
     -- clips a child of the minimap on this client.
-    local trackedRim = shortest / 2
-        - (MINIMAP_PIN_SIZE + NAV_MARK_PADDING) / 2 - MINIMAP_MARGIN
-    if trackedRim < 0 then trackedRim = 0 end
+    local trackedRimX, trackedRimY = Client.GetMinimapClipBounds(width, height,
+        (MINIMAP_PIN_SIZE + NAV_MARK_PADDING) / 2 + MINIMAP_MARGIN, square)
     local origin = self:GetMinimapOrigin()
     if origin and not Client.PlaceMinimapPinOrigin(origin,
             -(report.playerX * yards[1]) / yardsPerPixel,
@@ -1529,17 +1514,18 @@ function NpcPins:DrawMinimap(report, areaId)
         local offsetX = ((target.x / 100) - report.playerX) * yards[1] / yardsPerPixel
         local offsetY = -(((target.y / 100) - report.playerY) * yards[2]) / yardsPerPixel
         local distance = math.sqrt(offsetX * offsetX + offsetY * offsetY)
-        local reach = limit
-        if target.small then reach = nodeLimit end
+        local reachX, reachY = limitX, limitY
+        if target.small then reachX, reachY = nodeLimitX, nodeLimitY end
         -- Off-view is the end of it for everything but the tracked creature,
         -- which is pulled to the rim whatever minimapPinsClampEdge says: that
         -- switch is about the incidental markers around the player, and this
         -- is the one pin they asked for by name.
         local onEdge = false
-        local draw = distance <= reach
+        local draw = Client.IsMinimapOffsetVisible(offsetX, offsetY, distance,
+            reachX, reachY, square)
         if not draw and target.categorySeen and target.categorySeen.tracked then
-            offsetX, offsetY, onEdge = ClampToRim(offsetX, offsetY, distance,
-                trackedRim)
+            offsetX, offsetY, onEdge = Client.ClampMinimapOffset(offsetX, offsetY,
+                distance, trackedRimX, trackedRimY, square)
             draw = onEdge
         end
         if draw then
@@ -1581,7 +1567,8 @@ function NpcPins:DrawMinimap(report, areaId)
     end
     self.minimapVisible = HidePoolFrom(self.minimapPool, visible + 1)
     self.minimapClamped = clamped
-    self:DrawMinimapNavMark(report, areaId, yards, yardsPerPixel, trackedRim)
+    self:DrawMinimapNavMark(report, areaId, yards, yardsPerPixel, trackedRimX,
+        trackedRimY, square)
 end
 
 -- One place that clears both the minimap pins and the ring, because every
@@ -1610,7 +1597,8 @@ end
 -- The ring is placed from the same yards-per-pixel and pulled to the same rim
 -- as the pin it frames, so the two cannot separate: an aimed spawn on the rim
 -- keeps its ring on the rim with it.
-function NpcPins:DrawMinimapNavMark(report, areaId, yards, yardsPerPixel, rim)
+function NpcPins:DrawMinimapNavMark(report, areaId, yards, yardsPerPixel, rimX,
+    rimY, square)
     local x, y = self:NavMarkPoint(areaId)
     local mark = x and self:GetMinimapNavMark()
     if not mark then
@@ -1623,7 +1611,8 @@ function NpcPins:DrawMinimapNavMark(report, areaId, yards, yardsPerPixel, rim)
     local distance = math.sqrt(offsetX * offsetX + offsetY * offsetY)
     local size = MINIMAP_PIN_SIZE + NAV_MARK_PADDING
     local onEdge
-    offsetX, offsetY, onEdge = ClampToRim(offsetX, offsetY, distance, rim)
+    offsetX, offsetY, onEdge = Client.ClampMinimapOffset(offsetX, offsetY,
+        distance, rimX, rimY, square)
     local alpha = self.minimapFocusDimmed and FOCUS_DIM_ALPHA or FOCUS_FULL_ALPHA
     if onEdge then
         alpha = alpha * MINIMAP_EDGE_ALPHA

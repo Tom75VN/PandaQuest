@@ -1219,6 +1219,7 @@ function MinimapPins:Project(playerX, playerY, widthYards, heightYards, span, wi
     local pixelsPerYard = width / span
     local playerYardX = playerX * widthYards
     local playerYardY = playerY * heightYards
+    local square = Client.IsMinimapSquare()
     local shortest = width
     local objectiveDotSize = self:GetObjectiveDotSize()
     if height < shortest then
@@ -1249,10 +1250,8 @@ function MinimapPins:Project(playerX, playerY, widthYards, heightYards, span, wi
     -- Visibility is decided from the configured resting size. A dot already
     -- visible at the edge must not disappear merely because the player
     -- hovered its tracker row and made it larger.
-    local objectiveLimit = shortest / 2 - objectiveDotSize / 2 - CLAMP_MARGIN
-    if objectiveLimit < 0 then
-        objectiveLimit = 0
-    end
+    local objectiveLimitX, objectiveLimitY = Client.GetMinimapClipBounds(width,
+        height, objectiveDotSize / 2 + CLAMP_MARGIN, square)
 
     local index = 1
     local total = table.getn(self.targets)
@@ -1269,7 +1268,8 @@ function MinimapPins:Project(playerX, playerY, widthYards, heightYards, span, wi
             -- position is not inside the current minimap view, hiding it is
             -- accurate; clamping would turn many different distant spawns
             -- into one false pile on the edge.
-            if distance <= objectiveLimit then
+            if Client.IsMinimapOffsetVisible(offsetX, offsetY, distance,
+                    objectiveLimitX, objectiveLimitY, square) then
                 failures = failures + self:ProjectObjective(target, anchorX, anchorY,
                     origin, objectiveDotSize, mainQuest, pass)
             end
@@ -1319,12 +1319,11 @@ function MinimapPins:Project(playerX, playerY, widthYards, heightYards, span, wi
                 -- left where the arithmetic puts it would be drawn over whatever
                 -- neighbours the minimap. Clamping is not presentation here, it
                 -- is containment.
-                local limit = shortest / 2 - half - CLAMP_MARGIN
-                if limit < 0 then
-                    limit = 0
-                end
+                local limitX, limitY = Client.GetMinimapClipBounds(width, height,
+                    half + CLAMP_MARGIN, square)
                 local onEdge = false
-                local beyondEdge = distance > limit and distance > 0
+                local beyondEdge = not Client.IsMinimapOffsetVisible(offsetX,
+                    offsetY, distance, limitX, limitY, square)
                 local anchor = origin
                 if beyondEdge and not clampEdge then
                     -- Same treatment as an out-of-view objective: hidden rather
@@ -1332,11 +1331,9 @@ function MinimapPins:Project(playerX, playerY, widthYards, heightYards, span, wi
                     -- player has turned edge-clamping off.
                     pin = nil
                 elseif beyondEdge then
-                    local scale = limit / distance
-                    anchorX = offsetX * scale
-                    anchorY = offsetY * scale
+                    anchorX, anchorY, onEdge = Client.ClampMinimapOffset(offsetX,
+                        offsetY, distance, limitX, limitY, square)
                     anchor = nil
-                    onEdge = true
                     clamped = clamped + 1
                 end
                 if pin then
@@ -1374,7 +1371,8 @@ function MinimapPins:Project(playerX, playerY, widthYards, heightYards, span, wi
     if areas then
         local config = PQ:GetModule("Config")
         areas:Project(playerYardX, playerYardY, pixelsPerYard, shortest / 2, self,
-            mainQuest, config and config:Get("mapShowAllAreas") and true or false, origin)
+            mainQuest, config and config:Get("mapShowAllAreas") and true or false,
+            origin, width, height)
     end
 end
 

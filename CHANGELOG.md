@@ -4,6 +4,29 @@ Player-visible PandaQuest changes, newest first. Keep every bullet short, clear 
 
 ## Unreleased
 
+## 0.5.5
+
+### Changed
+
+- The quest-tracker NPC finder now uses Modern WoW borders and checkboxes.
+- The unfinished HUD quest marker and its settings remain hidden for later.
+- The windowed (minimized) world map no longer shows its own copy of the quest tracker.
+- The Minimal dialogue theme is 20% larger, with larger objective text and more room above its buttons.
+- Tracker progress bars now have a two-pixel gap below objective text.
+- Quest givers on the map and minimap show a grey "!" when the quest is 5+ levels above you.
+
+### Fixed
+
+- Minimal dialogue no longer reopens after accepting a quest.
+- Minimal dialogue no longer cuts short NPC names and quest titles.
+- World-map quest areas and markers now draw above PandaConquest overlays.
+- Minimap quest areas and markers now follow PandaUI's Circle/Square setting.
+- ClassicAPI's yellow question mark no longer appears over quest targets.
+- Lucky Coin now shows the Trade District fountain on the map.
+- Zooming out on the windowed world map no longer snaps back to your current zone.
+- The windowed world map now updates quest areas and markers live, e.g. when a quest completes.
+- The sell-value coin now shows on rewards whose name is shared by another item (e.g. Ranger Leggings).
+
 ## 0.5.4
 
 ### Added

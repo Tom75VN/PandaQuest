@@ -645,10 +645,9 @@ function QuestVendorPins:DrawMinimap(report, areaId)
     end
 
     local yardsPerPixel = span / width
-    local shortest = width
-    if height < shortest then shortest = height end
-    local limit = shortest / 2 - MINIMAP_PIN_SIZE / 2 - MINIMAP_MARGIN
-    if limit < 0 then limit = 0 end
+    local square = Client.IsMinimapSquare()
+    local limitX, limitY = Client.GetMinimapClipBounds(width, height,
+        MINIMAP_PIN_SIZE / 2 + MINIMAP_MARGIN, square)
     local origin = self:GetMinimapOrigin()
     if origin and not Client.PlaceMinimapPinOrigin(origin,
             -(report.playerX * yards[1]) / yardsPerPixel,
@@ -664,7 +663,8 @@ function QuestVendorPins:DrawMinimap(report, areaId)
         local offsetX = ((target.x / 100) - report.playerX) * yards[1] / yardsPerPixel
         local offsetY = -(((target.y / 100) - report.playerY) * yards[2]) / yardsPerPixel
         local distance = math.sqrt(offsetX * offsetX + offsetY * offsetY)
-        if distance <= limit then
+        if Client.IsMinimapOffsetVisible(offsetX, offsetY, distance, limitX,
+                limitY, square) then
             local pin = self:GetMinimapPin(visible + 1)
             if pin then
                 pin.pandaQuestVendorTarget = target

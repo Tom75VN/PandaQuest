@@ -501,9 +501,11 @@ function MapContext:InspectPrimed(into)
     -- nil, an unanswered question, is left alone), never while a view this
     -- module parked is standing, and at most once every RECENTER_SECONDS so a
     -- place where the call cannot resolve a zone does not re-issue it per tick.
-    -- A player browsing a continent has the map open and is never overruled.
+    -- A player browsing a continent has the map open and is never overruled,
+    -- including on the windowed map, which leaves the game UI visible.
     if (not report.zoneIndex or report.zoneIndex == 0) and not self.parkedAreaId
-        and Client.IsGameUIHidden() == false then
+        and Client.IsGameUIHidden() == false
+        and not Client.IsWindowedWorldMapOpen() then
         local now = Client.Now()
         if now and (not self.recenteredAt or now - self.recenteredAt >= RECENTER_SECONDS) then
             self.recenteredAt = now

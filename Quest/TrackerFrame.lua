@@ -129,11 +129,8 @@ local HIDDEN_QUESTS = "trackerHiddenQuests"
 local ZONE_ROW_HEIGHT = 18
 local QUEST_ROW_HEIGHT = 16
 local WRAPPED_ROW_TEXT_PADDING = 2
--- 2px taller than the text itself needs: an objective row's progress bar is
--- bottom-anchored (Compatibility/ClientAPI.lua's track/fill textures), so the
--- extra height is what actually reads as a margin-top on the bar -- the gap
--- between the counter text above it and the bar itself.
 local OBJECTIVE_ROW_HEIGHT = 14
+local OBJECTIVE_PROGRESS_GAP = 2
 local OBJECTIVE_ROW_GAP = 1
 -- Quest rows sit almost flush with the zone header above them: the round
 -- quest dot is drawn at the row's own left edge, so a wider indent read as
@@ -1338,21 +1335,28 @@ end
 
 -- Drawing ----------------------------------------------------------------------
 
-local function RowHeight(kind)
+local function RowHeight(kind, progress)
     if kind == "zone" then
         return ZONE_ROW_HEIGHT
     elseif kind == "quest" then
         return QUEST_ROW_HEIGHT
     end
+    if type(progress) == "number" then
+        return OBJECTIVE_ROW_HEIGHT + OBJECTIVE_PROGRESS_GAP
+    end
     return OBJECTIVE_ROW_HEIGHT
 end
 
-local function MeasuredTrackerRowHeight(kind, row, text)
-    local height = RowHeight(kind)
+local function MeasuredTrackerRowHeight(kind, row, text, progress)
+    local height = RowHeight(kind, progress)
     local measuredHeight = Client.MeasureTrackerRowTextHeight(row, text)
-    if type(measuredHeight) == "number"
-        and math.ceil(measuredHeight) + WRAPPED_ROW_TEXT_PADDING > height then
-        height = math.ceil(measuredHeight) + WRAPPED_ROW_TEXT_PADDING
+    local progressGap = type(progress) == "number" and OBJECTIVE_PROGRESS_GAP or 0
+    if type(measuredHeight) == "number" then
+        local measuredRowHeight = math.ceil(measuredHeight)
+            + WRAPPED_ROW_TEXT_PADDING + progressGap
+        if measuredRowHeight > height then
+            height = measuredRowHeight
+        end
     end
     return height
 end
@@ -1375,7 +1379,7 @@ local function HeightThroughLine(lines, stopIndex, window, width)
         elseif kind == "objective" and previousKind == "objective" then
             top = top + OBJECTIVE_ROW_GAP
         end
-        local height = RowHeight(kind)
+        local height = RowHeight(kind, line.progress)
         if (kind == "quest" or kind == "objective")
             and window and type(width) == "number" then
             local slot = measuredSlots[kind]
@@ -1393,7 +1397,7 @@ local function HeightThroughLine(lines, stopIndex, window, width)
                 end
                 Client.PlaceTrackerRow(row, window, indent, top, width, height)
                 Client.SetTrackerRowText(row, line.text, line.red, line.green, line.blue)
-                height = MeasuredTrackerRowHeight(kind, row, line.text)
+                height = MeasuredTrackerRowHeight(kind, row, line.text, line.progress)
                 Client.HideObject(row)
             end
         end
@@ -1895,7 +1899,7 @@ function TrackerFrame:RedrawWindow(window, lines, questCount, completed, mapOwne
         local row = Client.GetTrackerRow(window, kind, slot)
         if row then
             local indent = RowIndent(kind)
-            local height = RowHeight(kind)
+            local height = RowHeight(kind, line.progress)
             -- The number is set before the row is placed: it decides the
             -- label's left inset, and PlaceTrackerRow is what turns that inset
             -- into the label width the Fit() calls below measure against.
@@ -1921,8 +1925,8 @@ function TrackerFrame:RedrawWindow(window, lines, questCount, completed, mapOwne
             Client.SetTrackerRowText(row, fitted, line.red, line.green, line.blue)
 
             if kind == "quest" or kind == "objective" then
-                height = MeasuredTrackerRowHeight(kind, row, fitted)
-                if height > RowHeight(kind) then
+                height = MeasuredTrackerRowHeight(kind, row, fitted, line.progress)
+                if height > RowHeight(kind, line.progress) then
                     Client.PlaceTrackerRow(row, window, indent, top, width, height)
                 end
             end
@@ -2157,6 +2161,14 @@ function TrackerFrame:Refresh()
     self:CheckPositionOnScreen()
     self:SyncAreaToggle()
 
+    -- The windowed (minimized) map keeps the HUD tracker on screen beside it,
+    -- so its map copy stays hidden there and redraws on the next full map.
+    local mapWindowed = Client.IsWorldMapWindowed()
+    if mapWindowed and Client.IsObjectVisible(self.mapWindow) then
+        Client.HideObject(self.mapWindow)
+        self.mapDirty = true
+    end
+
     local lines, questCount, completed = self:BuildLines()
     self:PreparePendingReveal(lines)
     local parts = { tostring(questCount), tostring(completed),
@@ -2187,6 +2199,9 @@ function TrackerFrame:Refresh()
         end
     end
     local drawMap = not self.mapInitialized or mapPresented ~= false
+    if mapWindowed then
+        drawMap = false
+    end
 
     if not self.dirty and signature == self.signature then
         if drawMap and self.mapDirty then
@@ -2751,6 +2766,14 @@ function TrackerFrame:OnInit()
         MAP_WINDOW_NAME, "WorldMapFrame", true)
     if mapWindow then
         self.mapWindow = mapWindow
+        -- Opening the map already windowed: hide at once rather than on the
+        -- next tracker tick. A mode switch with the map open waits for it.
+        Client.SetObjectScript(mapWindow, "OnShow", function()
+            if Client.IsWorldMapWindowed() then
+                Client.HideObject(mapWindow)
+                TrackerFrame.mapDirty = true
+            end
+        end)
     end
     self:ApplyBackgroundOpacity()
 

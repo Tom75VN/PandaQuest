@@ -554,6 +554,22 @@ function QuestTarget:Resolve(quest, areaId)
         return nil, "noComponent"
     end
 
+    local unitIds = {}
+    local objectIds = {}
+    local sourceIndex = 1
+    local sourceTotal = table.getn(locations)
+    while sourceIndex <= sourceTotal do
+        local location = locations[sourceIndex]
+        if location and type(location.sourceId) == "number" then
+            if location.sourceType == "unit" then
+                unitIds[location.sourceId] = true
+            elseif location.sourceType == "object" then
+                objectIds[location.sourceId] = true
+            end
+        end
+        sourceIndex = sourceIndex + 1
+    end
+
     return {
         x = primary.x,
         y = primary.y,
@@ -563,6 +579,8 @@ function QuestTarget:Resolve(quest, areaId)
         locationCount = table.getn(locations),
         spawnCount = primary.count,
         itemUseUnknown = itemUseUnknown,
+        unitIds = unitIds,
+        objectIds = objectIds,
     }
 end
 
