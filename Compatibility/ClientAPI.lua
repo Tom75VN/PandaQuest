@@ -5444,14 +5444,18 @@ function Client.CreateMinimapPin(index, size, red, green, blue)
         or (type(index) ~= "number" and type(index) ~= "string") then
         return nil
     end
-    local name = "PandaQuestMinimapPin" .. tostring(index)
-    local ok, frame = pcall(create, "Button", name, map)
+    -- Unnamed on purpose: minimap-button collectors (pfUI's addonbuttons,
+    -- PandaUI's icon group) gather every NAMED small Button child of Minimap
+    -- with a click script, which pulled the quest pins into their button bar.
+    -- The key stays on the frame for diagnostics and tests.
+    local ok, frame = pcall(create, "Button", nil, map)
     if not ok or not frame then
-        ok, frame = pcall(create, "Frame", name, map)
+        ok, frame = pcall(create, "Frame", nil, map)
     end
     if not ok or not frame then
         return nil
     end
+    frame.pandaQuestPinKey = tostring(index)
     if type(size) ~= "number" or size <= 0 then
         size = 14
     end
@@ -5503,7 +5507,8 @@ function Client.CreateMinimapAreaGroup()
     if not map or not create then
         return nil
     end
-    local ok, group = pcall(create, "Frame", "PandaQuestMinimapAreas", map)
+    -- Unnamed for the same reason as the pins (Client.CreateMinimapPin).
+    local ok, group = pcall(create, "Frame", nil, map)
     if not ok or not group then
         return nil
     end
@@ -5628,7 +5633,8 @@ function Client.CreateMinimapPinOrigin(name)
     if not map or not create or type(name) ~= "string" then
         return nil
     end
-    local ok, origin = pcall(create, "Frame", "PandaQuestMinimapOrigin" .. name, map)
+    -- Unnamed for the same reason as the pins (Client.CreateMinimapPin).
+    local ok, origin = pcall(create, "Frame", nil, map)
     if not ok or not origin or type(origin.SetPoint) ~= "function"
         or type(origin.ClearAllPoints) ~= "function" then
         return nil

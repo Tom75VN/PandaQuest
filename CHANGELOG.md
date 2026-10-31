@@ -26,6 +26,7 @@ Player-visible PandaQuest changes, newest first. Keep every bullet short, clear 
 - Zooming out on the windowed world map no longer snaps back to your current zone.
 - The windowed world map now updates quest areas and markers live, e.g. when a quest completes.
 - The sell-value coin now shows on rewards whose name is shared by another item (e.g. Ranger Leggings).
+- Minimap quest markers no longer get pulled into pfUI's minimap button bar.
 
 ## 0.5.4
 
