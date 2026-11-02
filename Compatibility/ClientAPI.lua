@@ -111,8 +111,8 @@ function Client.GetClassicAPIStatus()
 end
 
 -- PandaTool: optional read-only camera DLL. It registers PANDATOOL_VERSION and
--- the PandaTool table only beside ClassicAPI or UnitXP_SP3
--- (dll.pandatool_camera_projection). Feature modules use these wrappers only.
+-- the PandaTool table; standalone since 0.1.2, no ClassicAPI or UnitXP_SP3
+-- needed (dll.pandatool_camera_projection). Feature modules use these wrappers only.
 Client.PANDATOOL_PROJECTION_VERSION = 101
 
 -- One main-chunk local for these helpers: this chunk is near the 200-local limit.
@@ -186,13 +186,22 @@ function Client.GetGroundZ(posY, posX, refZ)
     return z
 end
 
--- ClassicAPI UnitPosition: posY (west), posX (north), posZ, map id.
+-- ClassicAPI UnitPosition: posY (west), posX (north), posZ, map id. For the
+-- player only, PandaTool 0.1.3 GetPlayerPosition (same order) when ClassicAPI
+-- is missing.
 function Client.GetUnitWorldPosition(unit)
+    unit = unit or "player"
+    local ok, posY, posX, posZ, mapId
     local fn = Resolve("UnitPosition")
-    if not fn then
-        return nil
+    if fn then
+        ok, posY, posX, posZ, mapId = pcall(fn, unit)
     end
-    local ok, posY, posX, posZ, mapId = pcall(fn, unit or "player")
+    if (not ok or type(posY) ~= "number") and unit == "player" then
+        fn = PandaToolHelper.Function("GetPlayerPosition")
+        if fn then
+            ok, posY, posX, posZ, mapId = pcall(fn)
+        end
+    end
     if not ok or type(posY) ~= "number" or type(posX) ~= "number" then
         return nil
     end

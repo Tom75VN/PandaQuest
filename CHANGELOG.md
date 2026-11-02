@@ -9,13 +9,14 @@ Player-visible PandaQuest changes, newest first. Keep every bullet short, clear 
 ### Changed
 
 - PandaQuest and PandaMap now share one panda minimap settings button without pandaUI.
-- With PandaTool installed, the HUD quest marker now follows camera tilt and zoom.
+- With PandaTool installed, the HUD quest marker now follows camera tilt and zoom, even without ClassicAPI (PandaTool 0.1.3+).
 - A ready quest's hand-in page now heads its reward panel "Rewards", like the completion page.
 - Clicking the Immersive Dialogue card only turns pages; accepting or completing needs the button or Space.
 
 ### Fixed
 
 - The navigation arrow now points at the quest area centre, the same spot as the HUD marker.
+- The HUD marker and navigation arrow now find targets recorded on a neighbouring zone's map, e.g. Shazknock from Durotar.
 - Immersive Dialogue reward choices now remain clickable outside the Minimal theme.
 - The quest log's Follow button no longer cuts its label short.
 - The Alliance and Horde dialogue buttons now centre their label on the button face.

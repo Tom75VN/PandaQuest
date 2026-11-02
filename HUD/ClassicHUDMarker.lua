@@ -74,6 +74,9 @@ function ClassicHUDMarker:RefreshContext()
 
     local questTarget = PQ:GetModule("QuestTarget")
     local target, reason = questTarget and questTarget:Resolve(quest, areaId)
+    if questTarget and not target and reason == "noLocationsInArea" then
+        target, reason = questTarget:ResolveNearby(quest, areaId)
+    end
     if not target then
         self.contextReason = reason or "noTarget"
         return

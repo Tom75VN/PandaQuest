@@ -334,7 +334,7 @@ function Waypoint:RefreshContext()
     -- The same gate the map pins use: a uniquely resolved player area, and a
     -- view that can actually project the player. Sharing it is what keeps the
     -- marker and the blue tiles agreeing about when a quest is locatable.
-    local areaId, _, why = mapContext:GetCurrentZoneView()
+    local areaId, zoneReport, why = mapContext:GetCurrentZoneView()
     if not areaId then
         self.contextReason = why or "noZoneView"
         return
@@ -346,6 +346,11 @@ function Waypoint:RefreshContext()
         return
     end
     local target, targetWhy = questTarget:Resolve(quest, areaId)
+    -- Recorded on a neighbouring zone's map but inside this one.
+    if not target and targetWhy == "noLocationsInArea" then
+        target, targetWhy = questTarget:ResolveNearby(quest, areaId,
+            zoneReport.playerX * 100, zoneReport.playerY * 100)
+    end
     if not target then
         self.contextReason = targetWhy or "noTarget"
         return

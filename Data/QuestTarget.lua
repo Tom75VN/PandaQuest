@@ -584,6 +584,112 @@ function QuestTarget:Resolve(quest, areaId)
     }
 end
 
+-- Zones of one continent where a quest has any recorded location, the gate
+-- that keeps ResolveNearby from running Resolve (which allocates) on every
+-- zone. Database locations are static, so the list is kept for the session.
+-- A quest with an item-use step keeps every zone: which of its sources count
+-- depends on the bags.
+QuestTarget.candidateZones = {}
+
+function QuestTarget:GetCandidateZones(database, mapContext, questId, complete, continentMapId)
+    local key = questId * 2 + (complete and 1 or 0)
+    local byContinent = self.candidateZones[key]
+    if not byContinent then
+        byContinent = {}
+        self.candidateZones[key] = byContinent
+    end
+    local cached = byContinent[continentMapId]
+    if cached then
+        return cached
+    end
+    local zones = mapContext:GetContinentZones(continentMapId)
+    local hasItemUse = not complete
+        and table.getn(database:GetQuestItemUseTargets(questId)) > 0
+    local list = {}
+    local index = 1
+    local total = table.getn(zones)
+    while index <= total do
+        local zoneId = zones[index]
+        if hasItemUse
+            or table.getn(database:GetQuestLocations(questId, complete, zoneId)) > 0 then
+            table.insert(list, zoneId)
+        end
+        index = index + 1
+    end
+    byContinent[continentMapId] = list
+    return list
+end
+
+-- The quest's point recorded on ANOTHER zone of the same continent, but lying
+-- inside areaId's map, converted into areaId's percentages. For a target the
+-- database files under its neighbour: Shazknock (55049) is recorded only on
+-- The Barrens (61.8, 3.9), which is Durotar 31.7, 13.0, so a player in
+-- Durotar got "noLocationsInArea" (HUD-WAYPOINT.md, 2026-11-03).
+--
+-- Each zone is resolved by Resolve itself, so the point is the one that
+-- zone's map draws. Converted through the continent rectangles MapContext
+-- validates (Database/worldmap.lua against the minimap yard sizes). Only
+-- points inside areaId's map rectangle count. With several, the one nearest
+-- (playerX, playerY), areaId percentages, wins; else the first by area ID.
+--
+-- Returns the target (x, y in areaId percentages, areaId = areaId,
+-- sourceAreaId = the zone it was found on), or nil plus a reason.
+function QuestTarget:ResolveNearby(quest, areaId, playerX, playerY)
+    local mapContext = PQ:GetModule("MapContext")
+    local database = Database()
+    if not mapContext or not database or not database.available
+        or type(quest) ~= "table" or type(quest.questId) ~= "number" then
+        return nil, "noLocationsInArea"
+    end
+    local home = mapContext:GetContinentZoneTransform(areaId)
+    if not home or not (home[4] > 0) or not (home[5] > 0) then
+        return nil, "noLocationsInArea"
+    end
+
+    local complete = quest.isComplete == 1
+    local zones = self:GetCandidateZones(database, mapContext, quest.questId,
+        complete, home[1])
+    local best, bestDistance
+    local index = 1
+    local total = table.getn(zones)
+    while index <= total do
+        local zoneId = zones[index]
+        if zoneId ~= areaId then
+            local target = self:Resolve(quest, zoneId)
+            local u, v
+            if target then
+                u, v = mapContext:ZoneToContinent(home[1], zoneId, target.x, target.y)
+            end
+            if u then
+                local x = (u - home[2]) / home[4] * 100
+                local y = (v - home[3]) / home[5] * 100
+                if x >= 0 and x <= 100 and y >= 0 and y <= 100 then
+                    local distance = 0
+                    if type(playerX) == "number" and type(playerY) == "number" then
+                        local east, south = self:ToYards(areaId, x - playerX, y - playerY)
+                        if east then
+                            distance = east * east + south * south
+                        end
+                    end
+                    if not best or distance < bestDistance then
+                        target.x = x
+                        target.y = y
+                        target.sourceAreaId = zoneId
+                        target.areaId = areaId
+                        best = target
+                        bestDistance = distance
+                    end
+                end
+            end
+        end
+        index = index + 1
+    end
+    if not best then
+        return nil, "noLocationsInArea"
+    end
+    return best
+end
+
 -- Converts a displacement in database percentages into real yards, using the
 -- bundled per-area width/height. This is what makes the waypoint's bearing and
 -- distance true rather than approximate: percentages are not isotropic -- a

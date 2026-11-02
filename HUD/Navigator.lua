@@ -553,6 +553,42 @@ function Navigator:ResolveCentre(quest, areaId)
     return cache.target
 end
 
+-- The followed quest's point when it is recorded only on a neighbouring
+-- zone's map that overlaps this one (QuestTarget:ResolveNearby, the HUD
+-- marker's rule), shaped like a FindNearestTarget result. Cached like
+-- ResolveCentre, so the 0.25s pass allocates nothing while it holds.
+Navigator.nearbyCache = {}
+
+function Navigator:ResolveNearbyTarget(quest, areaId, playerU, playerV)
+    if type(quest) ~= "table" or type(quest.questId) ~= "number" then
+        return nil
+    end
+    local cache = self.nearbyCache
+    local complete = quest.isComplete == 1
+    if cache.titleKey == quest.titleKey and cache.areaId == areaId
+        and cache.complete == complete and cache.builds == self.sceneBuilds then
+        return cache.target
+    end
+    local questTarget = QuestTarget()
+    local near = questTarget and questTarget:ResolveNearby(quest, areaId,
+        playerU * 100, playerV * 100)
+    cache.titleKey = quest.titleKey
+    cache.areaId = areaId
+    cache.complete = complete
+    cache.builds = self.sceneBuilds
+    cache.target = nil
+    if near then
+        cache.target = {
+            x = near.x,
+            y = near.y,
+            complete = near.complete and true or false,
+            kind = near.complete and "turnin" or "objective",
+            quest = quest,
+        }
+    end
+    return cache.target
+end
+
 function Navigator:RefreshContext()
     self.context = nil
 
@@ -624,6 +660,14 @@ function Navigator:RefreshContext()
     end
     local target, targetWhy = self:FindNearestTarget(areaId, playerU, playerV,
         eastPerPercent, southPerPercent, targetFollowingKey)
+    -- Nothing here for the followed quest: try a neighbouring zone's map.
+    if not target and followingKey and mainQuest then
+        local nearby = self:ResolveNearbyTarget(mainQuest:GetQuest(), areaId,
+            playerU, playerV)
+        if nearby then
+            target = nearby
+        end
+    end
     if not target then
         self.contextReason = targetWhy or "noTarget"
         return
