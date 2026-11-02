@@ -110,6 +110,118 @@ function Client.GetClassicAPIStatus()
     return true, tostring(major) .. "." .. tostring(minor) .. "." .. tostring(patch)
 end
 
+-- PandaTool: optional read-only camera DLL. It registers PANDATOOL_VERSION and
+-- the PandaTool table only beside ClassicAPI or UnitXP_SP3
+-- (dll.pandatool_camera_projection). Feature modules use these wrappers only.
+Client.PANDATOOL_PROJECTION_VERSION = 101
+
+-- One main-chunk local for these helpers: this chunk is near the 200-local limit.
+local PandaToolHelper = { worldPosQuery = { x = 0, y = 0 } }
+
+function PandaToolHelper.Version()
+    local ok, packed = pcall(getglobal, "PANDATOOL_VERSION")
+    if not ok or type(packed) ~= "number" or packed <= 0 then
+        return nil
+    end
+    return packed
+end
+
+function PandaToolHelper.Function(name)
+    local ok, tool = pcall(getglobal, "PandaTool")
+    if not ok or type(tool) ~= "table" then
+        return nil
+    end
+    local fn = tool[name]
+    if type(fn) ~= "function" then
+        return nil
+    end
+    return fn
+end
+
+-- detected, "major.minor.patch", packed number.
+function Client.GetPandaToolStatus()
+    local packed = PandaToolHelper.Version()
+    if not packed then
+        return false, nil, nil
+    end
+    local major = math.floor(packed / 10000)
+    local minor = math.floor(math.mod(packed, 10000) / 100)
+    local patch = math.mod(packed, 100)
+    return true, tostring(major) .. "." .. tostring(minor) .. "." .. tostring(patch), packed
+end
+
+-- 0.1.1 (101) is the first build that keeps x on the correct side for a point
+-- behind the camera, which edge pinning needs (ptplate v3).
+function Client.HasCameraProjection()
+    local packed = PandaToolHelper.Version()
+    return packed ~= nil and packed >= Client.PANDATOOL_PROJECTION_VERSION
+        and PandaToolHelper.Function("WorldToScreen") ~= nil
+end
+
+-- x, y in WorldFrame units (origin bottom-left) and visible (true / false), or
+-- nil. Arguments use UnitPosition's order and axes: posY west, posX north.
+function Client.WorldToScreen(posY, posX, posZ)
+    local fn = PandaToolHelper.Function("WorldToScreen")
+    if not fn then
+        return nil
+    end
+    local ok, x, y, visible = pcall(fn, posY, posX, posZ)
+    if not ok or type(x) ~= "number" or type(y) ~= "number" then
+        return nil
+    end
+    return x, y, visible and true or false
+end
+
+-- Terrain height under (posY, posX), ray from refZ + 50 down to refZ - 99.
+-- nil on unloaded terrain or outside that band.
+function Client.GetGroundZ(posY, posX, refZ)
+    local fn = PandaToolHelper.Function("GetGroundZ")
+    if not fn then
+        return nil
+    end
+    local ok, z = pcall(fn, posY, posX, refZ)
+    if not ok or type(z) ~= "number" then
+        return nil
+    end
+    return z
+end
+
+-- ClassicAPI UnitPosition: posY (west), posX (north), posZ, map id.
+function Client.GetUnitWorldPosition(unit)
+    local fn = Resolve("UnitPosition")
+    if not fn then
+        return nil
+    end
+    local ok, posY, posX, posZ, mapId = pcall(fn, unit or "player")
+    if not ok or type(posY) ~= "number" or type(posX) ~= "number" then
+        return nil
+    end
+    if type(posZ) ~= "number" then
+        posZ = nil
+    end
+    return posY, posX, posZ, mapId
+end
+
+-- ClassicAPI C_Map.GetWorldPosFromMapPos for a zone map position (0..1).
+-- Returns continentId, posY (west), posX (north), or nil. Unverified on Octo:
+-- callers check the result against UnitPosition. ClassicAPI returns a new
+-- vector per call, so call it only when the target changes.
+function Client.GetWorldPosFromMapPos(areaId, u, v)
+    local map = ResolveObject("C_Map")
+    if not map or type(map.GetWorldPosFromMapPos) ~= "function"
+        or type(areaId) ~= "number" or type(u) ~= "number" or type(v) ~= "number" then
+        return nil
+    end
+    PandaToolHelper.worldPosQuery.x = u
+    PandaToolHelper.worldPosQuery.y = v
+    local ok, continentId, world = pcall(map.GetWorldPosFromMapPos, areaId, PandaToolHelper.worldPosQuery)
+    if not ok or type(world) ~= "table"
+        or type(world.x) ~= "number" or type(world.y) ~= "number" then
+        return nil
+    end
+    return continentId, world.y, world.x
+end
+
 -- Guarded calls. Call0/1/2 keep the argument lists explicit rather than relying
 -- on varargs, which keeps the layer inside the conservative Lua subset.
 
@@ -1225,6 +1337,26 @@ function Client.GetGameTooltipUnitLabel()
     return text, true
 end
 
+-- True when the mouse is over an interface frame that is not a unit frame
+-- (an action button, the spellbook, a bag slot). GameTooltip then describes
+-- that frame's spell or item, whose name can equal an NPC's ("Ancestral
+-- Spirit"), so it is not an entity tooltip. GameTooltip:GetOwner is absent on
+-- OctoWoW, so the mouse focus is read instead. WorldFrame or no focus means
+-- the world; a focus carrying a `unit` string is a unit frame.
+function Client.IsMouseOverInterfaceFrame()
+    local ok, focus = Call0("GetMouseFocus")
+    if not ok or not focus then
+        return false
+    end
+    if focus == ResolveObject("WorldFrame") then
+        return false
+    end
+    if type(focus) == "table" and type(focus.unit) == "string" then
+        return false
+    end
+    return true
+end
+
 -- Reads back one of GameTooltip's own rendered rows. Region naming
 -- (GameTooltipTextLeft<i> / GameTooltipTextRight<i>) is runtime-confirmed on
 -- this client by the tooltipRegions capture in probe `tooltiphide`. The row's
@@ -1393,6 +1525,85 @@ function Client.AppendGameTooltipLines(lines)
     end
 
     return appended
+end
+
+-- pfUI's tooltip module owns GameTooltip's look: its own border, a health bar
+-- ABOVE the tooltip with the HP text on it (pfUI/modules/tooltip.lua, the
+-- GameTooltipStatusBar anchors and pfUI.tooltipStatusBar). An owned cover
+-- assumes the bar below and hid both (user screenshots 2026-11-01). pfUI.tooltip
+-- exists only when that module ran, i.e. it is not disabled in pfUI's settings.
+function Client.IsPfUITooltipActive()
+    local addon = ResolveObject("pfUI")
+    return addon ~= nil and addon.tooltip ~= nil
+end
+
+-- Keeps `lines` inside GameTooltip itself, the way pfUI and pfQuest add
+-- theirs (AddLine, then Show to relayout). `state` remembers where the block
+-- went: while its first row still reads back, the rows are rewritten in place
+-- (progress changing mid-hover); once the client rebuilds the tooltip the
+-- block is gone and is appended again. Nothing native is cleared or hidden.
+function Client.SyncAppendedGameTooltipLines(state, lines)
+    local tooltip = ResolveGameTooltip()
+    if not tooltip or type(state) ~= "table" then
+        return false
+    end
+    local count = Client.GetGameTooltipLineCount()
+    local total = table.getn(lines or {})
+    if type(count) ~= "number" or count < 1 then
+        return false
+    end
+    local start = state.start
+    local present = false
+    if start and state.first and start + state.count - 1 <= count then
+        local text = ReadGameTooltipRow("GameTooltipTextLeft" .. start)
+        present = text == state.first
+    end
+    if not present then
+        state.start, state.count, state.first = nil, 0, nil
+        if total == 0 then
+            return true
+        end
+        if not Client.AppendGameTooltipLines(lines) then
+            return false
+        end
+        state.start, state.count, state.first = count + 1, total, lines[1].text
+        return true
+    end
+
+    -- In place. Rows cannot be removed: surplus ones are blanked, and extra
+    -- ones are added only when the block is still the tooltip's last.
+    local changed = false
+    local index = 1
+    local slots = state.count
+    while index <= slots or index <= total do
+        local line = lines and lines[index]
+        if index <= slots then
+            local name = "GameTooltipTextLeft" .. (start + index - 1)
+            local label = ResolveObject(name)
+            local wanted = line and line.text or nil
+            if ReadGameTooltipRow(name) ~= wanted and label
+                    and type(label.SetText) == "function" then
+                pcall(label.SetText, label, wanted or "")
+                if line and type(label.SetTextColor) == "function" then
+                    pcall(label.SetTextColor, label, line.r or 1, line.g or 1, line.b or 1)
+                end
+                changed = true
+            end
+        elseif start + slots - 1 == count and type(tooltip.AddLine) == "function" then
+            pcall(tooltip.AddLine, tooltip, line.text, line.r or 1, line.g or 1, line.b or 1)
+            state.count = state.count + 1
+            changed = true
+        end
+        index = index + 1
+    end
+    state.first = ReadGameTooltipRow("GameTooltipTextLeft" .. start)
+    if not state.first then
+        state.start, state.count = nil, 0
+    end
+    if changed and type(tooltip.Show) == "function" then
+        pcall(tooltip.Show, tooltip)
+    end
+    return true
 end
 
 -- Quest difficulty colouring.
@@ -5944,11 +6155,20 @@ function Client.SetWaypointColor(frame, red, green, blue)
     if not frame or not frame.pandaQuestTexture then
         return false
     end
+    if frame.pandaQuestWaypointRed == red and frame.pandaQuestWaypointGreen == green
+        and frame.pandaQuestWaypointBlue == blue then
+        return true
+    end
     local texture = frame.pandaQuestTexture
     if type(texture.SetVertexColor) ~= "function" then
         return false
     end
     local ok = pcall(texture.SetVertexColor, texture, red, green, blue)
+    if ok then
+        frame.pandaQuestWaypointRed = red
+        frame.pandaQuestWaypointGreen = green
+        frame.pandaQuestWaypointBlue = blue
+    end
     return ok and true or false
 end
 
@@ -5956,7 +6176,13 @@ function Client.SetWaypointAlpha(frame, alpha)
     if not frame or type(frame.SetAlpha) ~= "function" then
         return false
     end
+    if frame.pandaQuestWaypointAlpha == alpha then
+        return true
+    end
     local ok = pcall(frame.SetAlpha, frame, alpha)
+    if ok then
+        frame.pandaQuestWaypointAlpha = alpha
+    end
     return ok and true or false
 end
 
@@ -5987,11 +6213,79 @@ function Client.PositionWaypointMarker(frame, offsetX, offsetY)
     if type(frame.ClearAllPoints) == "function" then
         pcall(frame.ClearAllPoints, frame)
     end
+    frame.pandaQuestAnchor = nil
     local ok = pcall(frame.SetPoint, frame, "CENTER", parent, "CENTER", offsetX, offsetY)
     if not ok then
         return false
     end
     pcall(frame.Show, frame)
+    return true
+end
+
+-- WorldFrame size in its own units: the space PandaTool.WorldToScreen uses.
+function Client.GetWorldFrameSize()
+    local world = ResolveObject("WorldFrame")
+    if not world or type(world.GetWidth) ~= "function"
+        or type(world.GetHeight) ~= "function" then
+        return nil
+    end
+    local okWidth, width = pcall(world.GetWidth, world)
+    local okHeight, height = pcall(world.GetHeight, world)
+    if not okWidth or not okHeight or type(width) ~= "number" or type(height) ~= "number"
+        or width <= 0 or height <= 0 then
+        return nil
+    end
+    return width, height
+end
+
+-- Multiplier from WorldFrame units to `frame`'s own SetPoint offset units.
+function Client.GetWorldToFrameScale(frame)
+    local world = ResolveObject("WorldFrame")
+    if not world or not frame or type(world.GetEffectiveScale) ~= "function"
+        or type(frame.GetEffectiveScale) ~= "function" then
+        return nil
+    end
+    local okWorld, worldScale = pcall(world.GetEffectiveScale, world)
+    local okFrame, frameScale = pcall(frame.GetEffectiveScale, frame)
+    if not okWorld or not okFrame or type(worldScale) ~= "number"
+        or type(frameScale) ~= "number" or worldScale <= 0 or frameScale <= 0 then
+        return nil
+    end
+    return worldScale / frameScale
+end
+
+-- Centres the marker on a WorldFrame point (x, y from the bottom-left, already
+-- in the marker's offset units). Identical writes are skipped
+-- (perf.reanchoring_many_frames_per_tick_stutters); `show` only on first place.
+function Client.PlaceWaypointMarkerOnWorld(frame, x, y, show)
+    if not frame or type(frame.SetPoint) ~= "function"
+        or type(x) ~= "number" or type(y) ~= "number" then
+        return false
+    end
+    local world = ResolveObject("WorldFrame")
+    if not world then
+        return false
+    end
+    if frame.pandaQuestAnchor ~= "world" then
+        if type(frame.ClearAllPoints) == "function" then
+            pcall(frame.ClearAllPoints, frame)
+        end
+        frame.pandaQuestAnchor = "world"
+        frame.pandaQuestWorldX = nil
+        frame.pandaQuestWorldY = nil
+    end
+    if x ~= frame.pandaQuestWorldX or y ~= frame.pandaQuestWorldY then
+        local ok = pcall(frame.SetPoint, frame, "CENTER", world, "BOTTOMLEFT", x, y)
+        if not ok then
+            frame.pandaQuestAnchor = nil
+            return false
+        end
+        frame.pandaQuestWorldX = x
+        frame.pandaQuestWorldY = y
+    end
+    if show then
+        pcall(frame.Show, frame)
+    end
     return true
 end
 
@@ -6004,6 +6298,7 @@ function Client.AnchorWaypointMarker(frame, anchor)
     if type(frame.ClearAllPoints) == "function" then
         pcall(frame.ClearAllPoints, frame)
     end
+    frame.pandaQuestAnchor = nil
     local ok = pcall(frame.SetPoint, frame, "BOTTOM", anchor, "TOP", 0, 4)
     if not ok then
         return false
@@ -9573,15 +9868,16 @@ function QuestLogSkin.FitLabelHost(button)
     if not host or not label then
         return
     end
-    local width = ReadObjectMethod(label, "GetStringWidth")
+    -- Width spans the whole button: a measured string width can come out short
+    -- (the label read "Follo..." on a 90-unit button), and the art carriers
+    -- already cover the button, so a wider host costs no extra mouse area.
+    local width = button.pandaQuestCarrierWidth
     local height = ReadObjectMethod(label, "GetStringHeight")
-    if type(width) ~= "number" or type(height) ~= "number"
-        or width < 1 or height < 1 then
-        width = button.pandaQuestCarrierWidth
+    if type(height) ~= "number" or height < 1 then
         height = button.pandaQuestCarrierHeight
-        if type(width) ~= "number" or type(height) ~= "number" then
-            return
-        end
+    end
+    if type(width) ~= "number" or type(height) ~= "number" then
+        return
     end
     if button.pandaQuestLabelHostWidth == width
         and button.pandaQuestLabelHostHeight == height then
@@ -20353,9 +20649,11 @@ Client.QUEST_DIALOGUE_ALLIANCE = {
         -- 11 px (QUEST_DIALOGUE_FONT_UNIT 0.8) (user request).
         LABEL_SIZE = 16,
         PANEL_OVERLAP = 5 * 0.8,
-        -- The label 2 pixels lower than the face's centre at the theme's
-        -- 1.296 scale (user requests).
-        LABEL_DROP = 2 * 10.29 / 8,
+        -- The label 1 pixel above the face's centre at the theme's 1.296
+        -- scale: the font draws its capitals about 3 pixels below its box's
+        -- centre, and 2 pixels lower drew them 3 below the chevron's centre
+        -- (user screenshot, 2026-11-02).
+        LABEL_DROP = -10.29 / 8,
         -- The label may span the whole button rather than stop short of the
         -- chevron, so the longest locale's Accept / Complete stays on one
         -- line (user request).
@@ -20867,16 +21165,23 @@ Client.QUEST_DIALOGUE_HORDE = Client.CopyQuestDialogueLayout(
             -- a design unit renders at QUEST_DIALOGUE_FONT_UNIT (0.8).
             LABEL_SIZE = 13 + 2 / 0.8,
             -- The label is never cut (user report: "Complete Que.."): it
-            -- may take the whole button, and stays centred while it ends 4
-            -- units short of the chevron's left edge (LABEL_RIGHT, from the
+            -- may take the whole button, and stays centred while it ends
+            -- short of the chevron's art (LABEL_RIGHT, from the
             -- button's centre), moving left past that. The face's left edge
             -- is 88.9 units from the centre, so 125 units (the longest
             -- locale, "Zavershit' zadanie", is about 122) fit on the face.
+            -- The chevron's art starts about 5 units right of its box, so
+            -- the limit sits 3 units past the box's left edge: "Complete
+            -- Quest" then has equal room to the face's left edge and to the
+            -- chevron, not pressed against the left border (user
+            -- screenshot, 2026-11-02).
             LABEL_WIDTH = 300 * 0.7,
-            LABEL_RIGHT = 76 * 0.7 - 18.3 * 0.7 / 2 - 4,
+            LABEL_RIGHT = 76 * 0.7 - 18.3 * 0.7 / 2 + 3,
             PANEL_OVERLAP = 11 * 0.7,
             -- The label 2 pixels and the chevron 1 pixel lower than the
-            -- face's centre at the theme's 1.296 scale (user requests).
+            -- face's centre at the theme's 1.296 scale (user requests): its
+            -- capitals then sit on the face's and the chevron's centre
+            -- (user screenshot, 2026-11-02; 1 pixel above drew 4 too high).
             LABEL_DROP = 2 * 10.29 / 8,
             CHEVRON_DROP = 10.29 / 8,
             CELL_PITCH = 127 / 512,
@@ -26437,7 +26742,10 @@ function Client.RenderQuestDialogueTurnIn(frame, turnIn)
                 if panelLevel < 0 then panelLevel = 0 end
             end
             pcall(panel.SetFrameLevel, panel, panelLevel)
-            local tileLevel = panelUnderCard and panelLevel or panelLevel + 1
+            -- Only the panel chrome tucks under the card. Its mouse-enabled
+            -- choice tiles stay above the card's pagination surface, as the
+            -- inline reward tiles do (pandaquest.dialogue_option_buttons_under_body_scroll).
+            local tileLevel = panelUnderCard and cardLevel + 1 or panelLevel + 1
             local tileIndex = 1
             while tiles[tileIndex] do
                 local tile = tiles[tileIndex]
@@ -28152,6 +28460,25 @@ function Client.GetNameplateOverlayFonts(overlay)
     return nil
 end
 
+-- pfUI's overlay on this plate and its health bar, or nil. pfUI stores its
+-- overlay on the native plate (parent.nameplate, with nameplate.parent back)
+-- and resizes the native plate to the overlay's width, which is its bar width
+-- plus 50 (pfUI/modules/nameplates.lua OnCreate and OnUpdate), or to 1 pixel
+-- with its "overlap" option. Beside the native plate's edge the badge floated
+-- ~25 units right of the bar (user screenshot 2026-11-01), so it sits beside
+-- the bar instead. The overlay already carries UIParent's scale.
+function Client.FindPfUINameplate(plate)
+    local overlay = type(plate) == "table" and plate.nameplate
+    if type(overlay) ~= "table" or overlay.parent ~= plate then
+        return nil
+    end
+    local health = overlay.health
+    if type(health) ~= "table" or type(health.GetObjectType) ~= "function" then
+        return nil
+    end
+    return overlay, health
+end
+
 -- The region to sit beside on an overlay: its health bar when it has one.
 function Client.GetNameplateOverlayAnchor(overlay)
     if type(overlay) == "table" and type(overlay.health) == "table"
@@ -28602,6 +28929,14 @@ PQ:DeclareCapability("cameraProjection", "missing",
     "no WorldToScreen and no camera getter anywhere in the client API reference or the compatibility "
     .. "database; the documented Camera category is setters only. The HUD waypoint projects the target "
     .. "through the player's facing instead, and cannot track free-look camera rotation")
+
+-- PandaTool's DLL registers before addons load, so a load-time check is enough.
+if Client.HasCameraProjection() then
+    PQ:DeclareCapability("cameraProjection", "detected",
+        "PandaTool.WorldToScreen present (PANDATOOL_VERSION >= 101). The HUD marker projects the "
+        .. "quest area centre through it; verified only after the in-game acceptance run "
+        .. "(dll.pandatool_camera_projection)")
+end
 
 PQ:DeclareCapability("playerFacing", "verified",
     "GetPlayerFacing() is documented on the updated client as returning the CHARACTER's rotation in "

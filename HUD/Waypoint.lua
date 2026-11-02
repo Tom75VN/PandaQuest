@@ -12,13 +12,12 @@ through the horizontal field of view onto a screen X offset, so the marker sits
 over the point on the horizon where the target lies. Turn left and it slides
 right; put the target behind you and it pins to the screen edge.
 
-It is **not** a full 3D-to-2D projection, and it cannot become one on this
-client. That needs the camera's yaw, pitch and field of view, and this client
-publishes none: the entire documented Camera surface is setters (SetView,
-SaveView, FlipCameraYaw, CameraZoomIn/Out), and a search of the whole
-compatibility database for WorldToScreen returns nothing. See the
-`cameraProjection` capability, which is declared "missing" precisely so this
-does not get "fixed" later by reaching for an API that is not there.
+Stock Octo has no camera getter, so that yaw marker cannot follow camera
+tilt or zoom (`camera.pitch_not_readable_octo`). With the optional PandaTool
+DLL (PANDATOOL_VERSION >= 101, `cameraProjection` "detected") the marker
+instead projects the quest area centre through the engine's own camera
+(`PlaceProjected`, `dll.pandatool_camera_projection`); the yaw marker stays as
+the fallback. Without PandaTool the marker keeps its own `hudWorldMarker` gate.
 
 ## Where the facing comes from, and the one limit left
 
@@ -90,10 +89,45 @@ Waypoint.lastRelativeAngle = nil
 Waypoint.lastClamped = false
 Waypoint.context = nil
 Waypoint.contextReason = nil
-Waypoint.lastLabelKey = nil
+Waypoint.lastLabelDistance = nil
+Waypoint.lastLabelDirection = nil
+Waypoint.lastLabelStale = nil
+Waypoint.projectedDistanceYards = nil
 Waypoint.halfFov = nil
 Waypoint.halfScreenWidth = nil
 Waypoint.verticalOffset = nil
+
+-- PandaTool camera projection (Client.HasCameraProjection). One reused table:
+-- RefreshContext fills it; the render-frame path reads it without allocating.
+-- Inset from the screen edge for a pinned marker, in marker units.
+Waypoint.EDGE_INSET = 40
+-- C_Map's player position must land this close to UnitPosition, yards.
+Waypoint.WORLD_CHECK_YARDS = 10
+-- A zone-yards target re-anchored on UnitPosition drifts by more than this
+-- only when the zone size disagrees with the world.
+Waypoint.REANCHOR_YARDS = 3
+Waypoint.projection = {
+    available = false,
+    ready = false,
+    reason = nil,
+    areaId = nil,
+    targetX = nil,
+    targetY = nil,
+    posY = nil,
+    posX = nil,
+    groundZ = nil,
+    source = nil,
+    checkError = nil,
+    maxDrift = 0,
+    width = nil,
+    height = nil,
+    scale = nil,
+    placements = 0,
+    failures = 0,
+    lastVisible = nil,
+    lastX = nil,
+    lastY = nil,
+}
 
 local RAD_PER_DEGREE = 0.017453292519943
 
@@ -239,8 +273,7 @@ end
 
 -- The refresh ----------------------------------------------------------------
 --
--- Two jobs at two cadences, and the split is a performance requirement rather
--- than tidiness.
+-- Separate context, state and render cadences are a performance requirement.
 --
 -- RefreshContext resolves the map view and the quest's target point. Both are
 -- expensive: MapContext:Inspect allocates a report and makes about eight
@@ -248,9 +281,10 @@ end
 -- locations to cells and flood-fills them into components. Neither changes
 -- between two frames -- only when the quest, the zone or the player's bags do.
 --
--- RefreshMarker runs at the marker's own rate and does the cheap half: one
--- position read, one facing read, some arithmetic, one SetPoint. That is the
--- part that has to keep up with a turning player.
+-- RefreshMarker runs at 20Hz and does the cheap state half: one position read,
+-- one facing read and the distance/label arithmetic. With PandaTool,
+-- RefreshProjectedMarker reuses that state and does only WorldToScreen plus
+-- the changed SetPoint on every rendered frame.
 --
 -- Doing the expensive half at 20Hz is precisely the per-tick burst of guarded
 -- calls and allocations that docs/ARCHITECTURE.md records as having been
@@ -258,6 +292,7 @@ end
 
 function Waypoint:RefreshContext()
     self.context = nil
+    self.projectedDistanceYards = nil
 
     local config = Config()
     if config and not config:Get("waypointEnabled") then
@@ -333,27 +368,123 @@ function Waypoint:RefreshContext()
         targetY = target.y,
         complete = target.complete,
     }
+    self:RefreshProjection(self.context)
+end
+
+-- Resolves the quest area centre in world yards for PandaTool. The target is
+-- fixed, so the conversion runs once per target; ground Z is retried until the
+-- terrain under it answers (GetGroundZ is nil on unloaded terrain).
+function Waypoint:RefreshProjection(context)
+    local p = self.projection
+    p.ready = false
+    p.available = Client.HasCameraProjection() and true or false
+    if not p.available then
+        p.reason = "noPandaTool"
+        return
+    end
+
+    local playerY, playerX, playerZ, playerMap = Client.GetUnitWorldPosition("player")
+    if not playerY then
+        p.reason = "noUnitPosition"
+        return
+    end
+    local playerU, playerV = Client.GetPlayerMapPosition("player")
+    if not playerU then
+        p.reason = "playerNotOnView"
+        return
+    end
+
+    if p.areaId ~= context.areaId or p.targetX ~= context.targetX
+        or p.targetY ~= context.targetY then
+        p.areaId = context.areaId
+        p.targetX = context.targetX
+        p.targetY = context.targetY
+        p.posY = nil
+        p.posX = nil
+        p.groundZ = nil
+        p.source = nil
+        p.checkError = nil
+        p.maxDrift = 0
+
+        -- ClassicAPI's map-to-world conversion, accepted only when the same
+        -- conversion puts the player where UnitPosition says.
+        local continent, targetY, targetX = Client.GetWorldPosFromMapPos(
+            context.areaId, context.targetX / 100, context.targetY / 100)
+        local playerContinent, checkY, checkX = Client.GetWorldPosFromMapPos(
+            context.areaId, playerU, playerV)
+        if targetY and checkY then
+            local dy = checkY - playerY
+            local dx = checkX - playerX
+            p.checkError = math.sqrt(dy * dy + dx * dx)
+            local sameMap = type(playerMap) ~= "number" or type(continent) ~= "number"
+                or (continent == playerMap and playerContinent == playerMap)
+            if sameMap and p.checkError <= self.WORLD_CHECK_YARDS then
+                p.posY = targetY
+                p.posX = targetX
+                p.source = "cmap"
+            end
+        end
+    end
+
+    -- Fallback: the zone's WorldMapArea size in yards, anchored on the
+    -- player's UnitPosition (posY grows west, posX grows north).
+    if p.source ~= "cmap" then
+        local questTarget = QuestTarget()
+        local eastYards, southYards
+        if questTarget then
+            eastYards, southYards = questTarget:ToYards(context.areaId,
+                context.targetX - playerU * 100, context.targetY - playerV * 100)
+        end
+        if not eastYards or not southYards then
+            p.reason = "noZoneDimensions"
+            return
+        end
+        local posY = playerY - eastYards
+        local posX = playerX - southYards
+        if p.posY then
+            local dy = posY - p.posY
+            local dx = posX - p.posX
+            local drift = math.sqrt(dy * dy + dx * dx)
+            if drift > p.maxDrift then
+                p.maxDrift = drift
+            end
+            if drift > self.REANCHOR_YARDS then
+                p.posY = posY
+                p.posX = posX
+                p.groundZ = nil
+            end
+        else
+            p.posY = posY
+            p.posX = posX
+            p.source = "zoneYards"
+        end
+    end
+
+    if not p.groundZ and playerZ then
+        p.groundZ = Client.GetGroundZ(p.posY, p.posX, playerZ)
+    end
+
+    local frame = self:GetFrame()
+    p.width, p.height = Client.GetWorldFrameSize()
+    p.scale = frame and Client.GetWorldToFrameScale(frame)
+    if not p.width or not p.scale then
+        p.reason = "noWorldFrame"
+        return
+    end
+    p.reason = nil
+    p.ready = true
 end
 
 function Waypoint:RefreshMarker()
+    self.projectedDistanceYards = nil
     local context = self.context
     if not context then
         return self:Hide(self.contextReason or "noContext")
     end
 
-    -- One module reference for the whole pass: BearingFromYards and
-    -- NormalizeDelta are static helpers ON the module, so they need the module
-    -- itself rather than the accessor.
-    local heading = GetPlayerHeading()
-    if not heading then
-        return self:Hide("noPlayerHeading")
-    end
-
-    -- Read fresh every tick: this is the one input that genuinely changes
-    -- between frames, and it costs a single guarded call. It is handed to
-    -- Sample rather than letting Sample read it again.
+    -- Distance remains a 20Hz state value. Camera projection itself uses the
+    -- cached world target and does not repeat this map-position call per frame.
     local playerU, playerV = Client.GetPlayerMapPosition("player")
-    heading:Sample(context.areaId, playerU, playerV)
     if not playerU then
         return self:Hide("playerNotOnView")
     end
@@ -369,11 +500,29 @@ function Waypoint:RefreshMarker()
     end
 
     local distanceYards = math.sqrt(eastYards * eastYards + southYards * southYards)
-    local bearing = heading.BearingFromYards(eastYards, southYards)
-    if not bearing then
+    if eastYards == 0 and southYards == 0 then
         -- Standing on the target. Not an error, just nothing to point at.
         self.lastDistanceYards = distanceYards
         return self:Hide("atTarget")
+    end
+
+    -- PandaTool path: the engine's own projection, so the marker follows
+    -- camera yaw, tilt and zoom. Any failure falls through to the yaw marker.
+    self.projectedDistanceYards = distanceYards
+    if self.projection.ready and self:PlaceProjected(context, distanceYards) then
+        return
+    end
+
+    -- The PandaTool path above needs no character-facing work. Resolve it only
+    -- for the yaw fallback, including a transient WorldToScreen failure.
+    local heading = GetPlayerHeading()
+    if not heading then
+        return self:Hide("noPlayerHeading")
+    end
+    heading:Sample(context.areaId, playerU, playerV)
+    local bearing = heading.BearingFromYards(eastYards, southYards)
+    if not bearing then
+        return self:Hide("badAngle")
     end
 
     local facing, facingSource, stale = heading:Get()
@@ -394,26 +543,7 @@ function Waypoint:RefreshMarker()
     if not frame then
         return self:Hide("noMarkerFrame")
     end
-    -- A quest ready to hand in points at its turn-in, so it wears the turn-in
-    -- colour the map already uses for that: green rather than the accent.
-    if context.complete then
-        Client.SetWaypointColor(frame, 0.2, 1, 0.2)
-    else
-        Client.SetWaypointColor(frame, 1, 1, 1)
-    end
-    Client.SetWaypointAlpha(frame, clamped and 0.6 or 1)
-
-    -- The label is rebuilt only when what it would say has changed. At 20Hz an
-    -- unconditional rebuild allocates a string every tick for a readout that
-    -- changes at walking pace.
-    local labelKey = tostring(math.floor(distanceYards))
-        .. (clamped and (offsetX < 0 and "L" or "R") or "-")
-        .. (stale and "s" or "")
-    if labelKey ~= self.lastLabelKey then
-        self.lastLabelKey = labelKey
-        Client.SetWaypointLabel(frame,
-            FormatLabel(distanceYards, clamped, offsetX, stale))
-    end
+    self:Dress(frame, context, distanceYards, clamped, offsetX, stale)
 
     if Client.PositionWaypointMarker(frame, offsetX, offsetY) then
         self.placements = self.placements + 1
@@ -431,6 +561,133 @@ function Waypoint:RefreshMarker()
     self.lastTargetX = context.targetX
     self.lastTargetY = context.targetY
     self.lastAreaId = context.areaId
+    self.lastProjected = false
+end
+
+-- Camera motion can change between two 20Hz state samples. Reproject the
+-- already-resolved world point every rendered frame without repeating map,
+-- quest, position, distance or label work.
+function Waypoint:RefreshProjectedMarker()
+    local context = self.context
+    local distanceYards = self.projectedDistanceYards
+    if not context or not self.projection.ready or type(distanceYards) ~= "number" then
+        return
+    end
+    self:PlaceProjected(context, distanceYards)
+end
+
+-- Colour, alpha and distance label, shared by both placement paths.
+function Waypoint:Dress(frame, context, distanceYards, clamped, offsetX, stale)
+    -- A quest ready to hand in points at its turn-in, so it wears the turn-in
+    -- colour the map already uses for that: green rather than the accent.
+    if context.complete then
+        Client.SetWaypointColor(frame, 0.2, 1, 0.2)
+    else
+        Client.SetWaypointColor(frame, 1, 1, 1)
+    end
+    Client.SetWaypointAlpha(frame, clamped and 0.6 or 1)
+
+    -- Keep primitive label inputs: building a string key every 20 Hz would
+    -- allocate even when the visible text did not change.
+    local roundedDistance = math.floor(distanceYards)
+    local direction = clamped and (offsetX < 0 and -1 or 1) or 0
+    local staleFlag = stale and true or false
+    if roundedDistance ~= self.lastLabelDistance
+        or direction ~= self.lastLabelDirection
+        or staleFlag ~= self.lastLabelStale then
+        self.lastLabelDistance = roundedDistance
+        self.lastLabelDirection = direction
+        self.lastLabelStale = staleFlag
+        Client.SetWaypointLabel(frame,
+            FormatLabel(distanceYards, clamped, offsetX, stale))
+    end
+end
+
+-- Pins a WorldFrame offset from the screen centre to the inset rectangle,
+-- along the same direction. Returns the pinned dx, dy.
+function Waypoint.PinToEdge(dx, dy, limitX, limitY)
+    if dx == 0 and dy == 0 then
+        return 0, -limitY
+    end
+    local ax = dx < 0 and -dx or dx
+    local ay = dy < 0 and -dy or dy
+    local scale
+    if ax * limitY >= ay * limitX then
+        scale = limitX / ax
+    else
+        scale = limitY / ay
+    end
+    return dx * scale, dy * scale
+end
+
+-- Projects the quest area centre with PandaTool and places the marker in
+-- WorldFrame space. Off screen or behind the camera (visible false), the
+-- marker pins to the edge in the direction of x, y from the centre
+-- (PandaTool 0.1.1 keeps x on the correct side for points behind).
+-- Allocation-free: the projected path runs once per rendered frame.
+function Waypoint:PlaceProjected(context, distanceYards)
+    local p = self.projection
+    local z = p.groundZ
+    if not z then
+        local _, _, playerZ = Client.GetUnitWorldPosition("player")
+        z = playerZ
+    end
+    if not z then
+        p.failures = p.failures + 1
+        return false
+    end
+    local x, y, visible = Client.WorldToScreen(p.posY, p.posX, z)
+    if not x then
+        p.failures = p.failures + 1
+        return false
+    end
+    local frame = self:GetFrame()
+    if not frame then
+        return false
+    end
+
+    local halfWidth = p.width * 0.5
+    local halfHeight = p.height * 0.5
+    local inset = self.EDGE_INSET / p.scale
+    local limitX = halfWidth - inset
+    local limitY = halfHeight - inset
+    if limitX < 1 then
+        limitX = 1
+    end
+    if limitY < 1 then
+        limitY = 1
+    end
+    local dx = x - halfWidth
+    local dy = y - halfHeight
+    local clamped = false
+    if not visible or dx > limitX or dx < -limitX or dy > limitY or dy < -limitY then
+        clamped = true
+        dx, dy = Waypoint.PinToEdge(dx, dy, limitX, limitY)
+    end
+
+    self:Dress(frame, context, distanceYards, clamped, dx, false)
+    if not Client.PlaceWaypointMarkerOnWorld(frame,
+        (halfWidth + dx) * p.scale, (halfHeight + dy) * p.scale, not self.shown) then
+        p.failures = p.failures + 1
+        return false
+    end
+
+    self.placements = self.placements + 1
+    p.placements = p.placements + 1
+    p.lastVisible = visible
+    p.lastX = x
+    p.lastY = y
+    self.shown = true
+    self.hiddenReason = nil
+    self.lastDistanceYards = distanceYards
+    self.lastRelativeAngle = nil
+    self.lastClamped = clamped
+    self.lastFacingSource = "camera"
+    self.lastTargetX = context.targetX
+    self.lastTargetY = context.targetY
+    self.lastAreaId = context.areaId
+    self.lastProjected = true
+    return true
 end
 
 -- One call that resolves everything and then draws, at the cost of doing the
@@ -459,12 +716,14 @@ function Waypoint:GetReport()
         facingSource = self.lastFacingSource,
         -- Built here rather than cached from RefreshMarker: it is a string, and
         -- building one per tick for a readout nobody reads until /pq waypoint
-        -- runs is the allocation this file's two cadences exist to avoid.
+        -- runs is the allocation these split cadences exist to avoid.
         facingConvention = GetPlayerHeading()
             and GetPlayerHeading():ConventionLabel() or nil,
         targetX = self.lastTargetX,
         targetY = self.lastTargetY,
         areaId = self.lastAreaId,
+        projected = self.lastProjected and true or false,
+        projection = self.projection,
     }
 end
 
@@ -485,6 +744,17 @@ function Waypoint:RecordDiagnostics()
         tostring(self.hiddenReason or "none"))
     config:SetSectionEntry("waypointDiagnostics", "facingSource",
         tostring(self.lastFacingSource or "none"))
+    -- PandaTool projection: which world conversion was used and how far its
+    -- player check landed from UnitPosition, for the Octo evidence log.
+    local p = self.projection
+    config:SetSectionEntry("waypointDiagnostics", "projectionAvailable", p.available and 1 or 0)
+    config:SetSectionEntry("waypointDiagnostics", "projectionReason", tostring(p.reason or "none"))
+    config:SetSectionEntry("waypointDiagnostics", "projectionSource", tostring(p.source or "none"))
+    config:SetSectionEntry("waypointDiagnostics", "projectionCheckYards", p.checkError or -1)
+    config:SetSectionEntry("waypointDiagnostics", "projectionMaxDrift", p.maxDrift)
+    config:SetSectionEntry("waypointDiagnostics", "projectionGroundZ", p.groundZ and 1 or 0)
+    config:SetSectionEntry("waypointDiagnostics", "projectionPlacements", p.placements)
+    config:SetSectionEntry("waypointDiagnostics", "projectionFailures", p.failures)
     local headingModule = GetPlayerHeading()
     if headingModule then
         config:SetSectionEntry("waypointDiagnostics", "headingSamples", headingModule.samples)
@@ -507,11 +777,13 @@ function Waypoint:OnEnable()
     -- navigator can use the same main quest, target and facing without this
     -- also drawing. Both are checked because either being off means there is
     -- nothing here to schedule.
+    -- PandaTool supplies the missing camera projection, so it opens the
+    -- marker's own gate; without it nothing changes.
     if not PQ:IsFeatureEnabled("mainQuestWaypoint")
-        or not PQ:IsFeatureEnabled("hudWorldMarker") then
+        or not (PQ:IsFeatureEnabled("hudWorldMarker") or Client.HasCameraProjection()) then
         -- The expensive half of the disable. Without this the driver would run
-        -- hud.waypoint at 20Hz forever -- reading the player position, sampling
-        -- the heading and re-projecting -- for a marker that is never shown.
+        -- hud.waypoint forever -- reading state and re-projecting -- for a
+        -- marker that is never shown.
         -- Nothing else creates the marker frame either: GetFrame is lazy and is
         -- only ever reached from RefreshMarker, which is only ever reached from
         -- the job scheduled below.
@@ -536,11 +808,21 @@ function Waypoint:OnEnable()
         Waypoint:RefreshContext()
     end)
 
-    -- Fast, because this has to keep up with a turning player: at 20Hz the
-    -- marker slides rather than steps.
-    driver:Schedule("hud.waypoint", interval, function()
-        Waypoint:RefreshMarker()
-    end)
+    if Client.HasCameraProjection() then
+        -- Position, distance and labels stay throttled; only the measured
+        -- zero-garbage projection and changed anchor write run every frame.
+        driver:Schedule("hud.waypointstate", interval, function()
+            Waypoint:RefreshMarker()
+        end)
+        driver:Schedule("hud.waypoint", 0, function()
+            Waypoint:RefreshProjectedMarker()
+        end)
+    else
+        driver:Unschedule("hud.waypointstate")
+        driver:Schedule("hud.waypoint", interval, function()
+            Waypoint:RefreshMarker()
+        end)
+    end
 
     driver:Schedule("hud.waypointdiagnostics", 5, function()
         Waypoint:RecordDiagnostics()
@@ -554,6 +836,7 @@ function Waypoint:OnEnable()
             -- A selection change invalidates the context, so wake that job:
             -- waking only the marker would redraw the previous target.
             driver:Wake("hud.waypointcontext")
+            driver:Wake("hud.waypointstate")
             driver:Wake("hud.waypoint")
         end)
     end

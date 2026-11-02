@@ -155,6 +155,7 @@ Navigator.etaRefreshes = 0
 Navigator.lastFacingSource = nil
 Navigator.lastTargetKind = nil
 Navigator.lastTargetTitle = nil
+Navigator.centreCache = {}
 Navigator.dragging = false
 Navigator.drags = 0
 Navigator.dragFailures = 0
@@ -528,6 +529,30 @@ function Navigator:FindNearestTarget(areaId, playerU, playerV,
     return best
 end
 
+-- The chosen quest's area centre from QuestTarget:Resolve: the point the HUD
+-- marker and the map's quest number use, so the arrow agrees with them. The
+-- nearest node only chooses which quest. Cached until the quest, area,
+-- completion or scene changes, so the 0.25s pass allocates nothing; nil when
+-- the quest has no centre here, and the caller keeps the node.
+function Navigator:ResolveCentre(quest, areaId)
+    if type(quest) ~= "table" or type(quest.questId) ~= "number" then
+        return nil
+    end
+    local cache = self.centreCache
+    local complete = quest.isComplete == 1
+    if cache.titleKey == quest.titleKey and cache.areaId == areaId
+        and cache.complete == complete and cache.builds == self.sceneBuilds then
+        return cache.target
+    end
+    local questTarget = QuestTarget()
+    cache.titleKey = quest.titleKey
+    cache.areaId = areaId
+    cache.complete = complete
+    cache.builds = self.sceneBuilds
+    cache.target = questTarget and questTarget:Resolve(quest, areaId) or nil
+    return cache.target
+end
+
 function Navigator:RefreshContext()
     self.context = nil
 
@@ -622,12 +647,18 @@ function Navigator:RefreshContext()
         followingKey = target.quest.titleKey
     end
 
+    local aimX, aimY, aimComplete = target.x, target.y, target.complete
+    local centre = self:ResolveCentre(target.quest, areaId)
+    if centre then
+        aimX, aimY, aimComplete = centre.x, centre.y, centre.complete
+    end
+
     self.contextReason = nil
     self.context = {
         areaId = areaId,
-        targetX = target.x,
-        targetY = target.y,
-        complete = target.complete,
+        targetX = aimX,
+        targetY = aimY,
+        complete = aimComplete,
         targetKind = target.kind,
         targetTitle = target.quest and target.quest.title,
         targetTitleKey = target.quest and target.quest.titleKey,

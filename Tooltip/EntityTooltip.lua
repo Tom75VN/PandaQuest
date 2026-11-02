@@ -33,7 +33,10 @@ pfMap:ShowTooltip -- see docs/CLIENT-COMPATIBILITY.md item 9). Three parts:
      which parses the live quest log line the way pfQuest does. This file owns
      no matching of its own; it turns an answer into tooltip lines.
 
-The quest rows are not added to GameTooltip. This client does not reliably
+Exception: with pfUI's tooltip module, which restyles GameTooltip itself, the
+quest rows are added inside GameTooltip instead (EntityTooltip:RefreshInside).
+
+Otherwise the quest rows are not added to GameTooltip. This client does not reliably
 relayout Lua-added lines, and a world-object tooltip may rebuild its native
 content repeatedly while it remains shown. The addon-owned replacement avoids
     both failure modes and lets progress change without mutating native content.
@@ -76,6 +79,13 @@ EntityTooltip.deferredNativeReads = 0
 EntityTooltip.nativeUnreadable = 0
 EntityTooltip.presentationCount = 0
 EntityTooltip.suspendedForNativeFade = false
+-- pfUI only: where the quest rows sit inside GameTooltip
+-- (Client.SyncAppendedGameTooltipLines), and what they were built from.
+EntityTooltip.inside = { count = 0 }
+EntityTooltip.insideKey = nil
+EntityTooltip.insideLines = nil
+EntityTooltip.insideQuestStamp = nil
+EntityTooltip.insideRespawnStamp = nil
 
 -- Diagnostics, persisted the same way WorldMapPins settled its own "did the
 -- mouse/click ever reach the addon" questions from SavedVariables instead of
@@ -457,6 +467,63 @@ local function CombinedLines(nativeLines, unitKey, questLines)
     return lines
 end
 
+-- What a hover's rows depend on besides the creature: the quest log's stamp
+-- and the bundled respawn duration (with a stamp of both its values).
+local function HoverInputs(unitKey)
+    local matcher = PQ:GetModule("ObjectiveMatch")
+    local matcherStatus = matcher and matcher:GetStatus() or {}
+    local questStamp = matcherStatus.questStamp or 0
+    local respawnMinimum, respawnMaximum, respawnReady, respawnRevision
+    local config = PQ:GetModule("Config")
+    if not config or config:Get("tooltipRespawnTimers") ~= false then
+        local database = PQ:GetModule("Database")
+        if database then
+            respawnMinimum, respawnMaximum, respawnReady, respawnRevision =
+                database:GetEntityRespawn(unitKey)
+        end
+    end
+    local respawnStamp = tostring(respawnMinimum) .. ":" .. tostring(respawnMaximum)
+        .. ":" .. tostring(respawnReady) .. ":" .. tostring(respawnRevision)
+    return questStamp, respawnMinimum, respawnMaximum, respawnStamp
+end
+
+-- pfUI's tooltip owns GameTooltip's look (its border, and its health bar
+-- with the HP text ABOVE the tooltip), which an owned replacement covered and
+-- could not reproduce (user screenshots 2026-11-01). With it, the quest rows
+-- go inside GameTooltip, the way pfUI and pfQuest add their own lines, and
+-- nothing is covered.
+function EntityTooltip:RefreshInside(unitKey)
+    if self.panel then
+        HidePanels(self)
+    end
+    self.lastStyle = "inside"
+    local state = self.inside
+    if not unitKey then
+        state.start, state.count, state.first = nil, 0, nil
+        self.insideKey = nil
+        return
+    end
+    local questStamp, respawnMinimum, respawnMaximum, respawnStamp = HoverInputs(unitKey)
+    if unitKey ~= self.insideKey or questStamp ~= self.insideQuestStamp
+            or respawnStamp ~= self.insideRespawnStamp then
+        if unitKey ~= self.insideKey then
+            state.start, state.count, state.first = nil, 0, nil
+        end
+        self.insideKey = unitKey
+        self.insideQuestStamp = questStamp
+        self.insideRespawnStamp = respawnStamp
+        local lines, direct, viaDatabase = self:BuildLines(
+            unitKey, respawnMinimum, respawnMaximum)
+        if direct ~= nil or viaDatabase ~= nil then
+            self:RecordMatch(direct, viaDatabase)
+        end
+        self.insideLines = lines and CombinedLines({}, unitKey, lines) or nil
+    end
+    if Client.SyncAppendedGameTooltipLines(state, self.insideLines) and state.start then
+        self.presentationCount = self.presentationCount + 1
+    end
+end
+
 -- The quest dialogue hides the world tooltip while it is up
 -- (Dialogue:SyncInterfaceHidden): the replacement goes at once rather than
 -- after its mouse-out hold, and nothing is presented until it is lifted.
@@ -490,6 +557,21 @@ function EntityTooltip:Refresh(fromShow)
     -- UnitName("mouseover") -- see Client.GetGameTooltipUnitLabel for why.
     local unitLabel, nativeShown = Client.GetGameTooltipUnitLabel()
     local unitKey = PQ.NameKey(unitLabel)
+
+    -- A spell or item tooltip from an interface frame can share an NPC's
+    -- name (the Ancestral Spirit spell and NPC 2994): never treat it as one.
+    if unitKey and not Client.UnitExists("mouseover")
+            and Client.IsMouseOverInterfaceFrame() then
+        unitKey = nil
+        -- No empty-label fade hold either: the native tooltip now shows
+        -- that frame's own content, not a fading creature.
+        if self.panel then ResetHover(self) end
+    end
+
+    if Client.IsPfUITooltipActive() then
+        self:RefreshInside(unitKey)
+        return
+    end
 
     -- Cursor-follow world objects can alternate GameTooltip between the cursor
     -- anchor and its native UIParent anchor every rendered frame (tooltipdupe
@@ -579,20 +661,7 @@ function EntityTooltip:Refresh(fromShow)
         return
     end
 
-    local matcher = PQ:GetModule("ObjectiveMatch")
-    local matcherStatus = matcher and matcher:GetStatus() or {}
-    local questStamp = matcherStatus.questStamp or 0
-    local respawnMinimum, respawnMaximum, respawnReady, respawnRevision
-    local config = PQ:GetModule("Config")
-    if not config or config:Get("tooltipRespawnTimers") ~= false then
-        local database = PQ:GetModule("Database")
-        if database then
-            respawnMinimum, respawnMaximum, respawnReady, respawnRevision =
-                database:GetEntityRespawn(unitKey)
-        end
-    end
-    local respawnStamp = tostring(respawnMinimum) .. ":" .. tostring(respawnMaximum)
-        .. ":" .. tostring(respawnReady) .. ":" .. tostring(respawnRevision)
+    local questStamp, respawnMinimum, respawnMaximum, respawnStamp = HoverInputs(unitKey)
     local style = Client.GetEntityTooltipStyle()
     -- Every row the native tooltip currently shows, so the replacement can
     -- carry them itself. nil means the rows could not be read, which is the

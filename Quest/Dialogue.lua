@@ -331,18 +331,29 @@ local function PrepareTextReveal(view)
     view.bodyRevealing = Dialogue.revealing and true or false
 end
 
+-- Steps that accept or hand in a quest. A click on the card never takes
+-- them: only the action button and Space do (user request, 2026-11-02).
+local BUTTON_ONLY_ACTIONS = { accept = true, progress = true, reward = true }
+
 -- What clicking the card does, after Immersion's TalkBox (inputs.accept,
 -- TalkBox:OnLeftClick, TalkBox:OnClick). A left click turns the page while
--- one is left, otherwise takes `primary`, the window's next step. A right
--- click turns the page, or on the last page goes back to the first (the
--- repeat), or opens the reward inspector when there is nothing to page.
+-- one is left, otherwise takes `primary`, the window's next step, unless
+-- that step accepts or hands in a quest: then the click only finishes the
+-- text and the step stays on Space and the button. A right click turns the
+-- page, or on the last page goes back to the first (the repeat), or opens
+-- the reward inspector when there is nothing to page.
 local function SetClickActions(view, primary)
     if view.hasNextPage then
         view.clickAction = "nextPage"
         view.rightClickAction = "nextPage"
         return
     end
-    view.clickAction = primary
+    if BUTTON_ONLY_ACTIONS[primary] then
+        view.clickAction = "revealText"
+        view.keyAction = primary
+    else
+        view.clickAction = primary
+    end
     if (view.pageCount or 1) > 1 then
         view.rightClickAction = "firstPage"
     elseif view.mode == "reward" then
@@ -743,6 +754,9 @@ local function BuildTurnIn(liveTitle, database, language, completable)
     local read = Dialogue.turnInRewards or {}
     local turnIn = { completable = completable and true or false,
         logIndex = logIndex, choices = {}, rewards = {}, lines = {} }
+    -- A completable quest heads its panel "Rewards", as the completion page
+    -- does (user request, 2026-11-02); an incomplete one keeps the missing note.
+    if completable then turnIn.title = PQ.L("DIALOGUE_REWARDS") end
     -- GearAdvisor's arrow and coin, ranked from the quest log's own copy of
     -- the choices (the quest-giver item calls have none on this page).
     -- Read once per quest, as the rewards are, until a complete ranking
@@ -1124,15 +1138,9 @@ local function BuildView(mode)
             end
             table.insert(view.inspectorActions, {
                 id = "reward", text = PQ.L("DIALOGUE_COMPLETE") })
+            -- A stray click after picking a reward completed the quest (user
+            -- report, 2026-10-12): SetClickActions keeps it on the button.
             SetClickActions(view, "reward")
-            -- Handing the quest in takes the Complete button or Space, never
-            -- a click elsewhere on the card: a stray click after picking a
-            -- reward completed the quest (user report, 2026-10-12). Such a
-            -- click only finishes the text.
-            if view.clickAction == "reward" then
-                view.clickAction = "revealText"
-                view.keyAction = "reward"
-            end
             view.actionButton = { action = "reward",
                 text = PQ.L("DIALOGUE_BUTTON_COMPLETE"),
                 shortText = PQ.L("DIALOGUE_BUTTON_COMPLETE_SHORT"),

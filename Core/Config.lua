@@ -493,8 +493,8 @@ local defaults = {
     -- Seeded in OnInit when the dormant HUD feature is enabled.
     waypointEnabled = false,
 
-    -- 20Hz. Fast enough that the marker slides rather than steps while the
-    -- player turns; the job body allocates nothing per tick beyond its label.
+    -- 20Hz for distance, label and yaw-fallback state. PandaTool camera
+    -- projection runs every rendered frame from the cached state.
     waypointInterval = 0.05,
 
     -- Horizontal field of view, in degrees, used to turn a bearing offset into
@@ -687,6 +687,13 @@ function Config:OnInit()
             PandaQuestDB.waypointEnabled = true
             PandaQuestDB.hudMarkerClassicAPISeen = true
         end
+    end
+
+    -- PandaTool opens the projected marker: switch it on the first launch it
+    -- is detected, then keep the player's choice.
+    if Client.HasCameraProjection() and PandaQuestDB.hudMarkerPandaToolSeen ~= true then
+        PandaQuestDB.waypointEnabled = true
+        PandaQuestDB.hudMarkerPandaToolSeen = true
     end
 
     -- trackerWidth's default has moved four times across sessions (260 -> 156

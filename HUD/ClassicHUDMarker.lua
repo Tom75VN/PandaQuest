@@ -130,7 +130,9 @@ function ClassicHUDMarker:OnEnable()
         return
     end
     local detected = Client.GetClassicAPIStatus()
-    if not detected then
+    -- With PandaTool, Waypoint projects the area centre itself and owns the
+    -- shared marker frame.
+    if not detected or Client.HasCameraProjection() then
         return
     end
     local driver = PQ:GetModule("Driver")

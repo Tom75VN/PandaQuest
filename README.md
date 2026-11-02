@@ -254,7 +254,7 @@ Everything is picked from the tracker's spyglass menu and shown on both maps.
 
 ## Version
 
-Current release: 0.5.5
+Current release: 0.6.0
 
 ## License
 

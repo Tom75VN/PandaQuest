@@ -285,9 +285,13 @@ function NameplateQuestIcon:RefreshPlate(plate, matcher, numbers, mainQuest, uiS
         return
     else
         self.onPlate = self.onPlate + 1
-        -- A WorldFrame child is not under UIParent's scale; pandaUI scales its
-        -- overlay the same way so plate art reads in UI units.
-        host, anchor, scale = plate.frame, plate.frame, uiScale
+        -- pfUI widens the native plate past its bar, so beside pfUI's bar.
+        host, anchor = Client.FindPfUINameplate(plate.frame)
+        if not host then
+            -- A WorldFrame child is not under UIParent's scale; pandaUI scales
+            -- its overlay the same way so plate art reads in UI units.
+            host, anchor, scale = plate.frame, plate.frame, uiScale
+        end
     end
 
     local total = table.getn(wanted)

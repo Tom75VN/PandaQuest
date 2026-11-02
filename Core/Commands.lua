@@ -1730,6 +1730,23 @@ local function ShowWaypoint(target)
         Line("  " .. PQ.L("CMD_WAYPOINT_HIDDEN", tostring(report.hiddenReason)))
     end
 
+    -- PandaTool projection, untranslated: a measurement for the Octo log.
+    local projection = report.projection
+    if projection and projection.available then
+        Line("  camera=" .. (report.projected and "projected" or "yaw")
+            .. " source=" .. tostring(projection.source)
+            .. " check=" .. (projection.checkError
+                and string.format("%.1f", projection.checkError) or "nil")
+            .. " drift=" .. string.format("%.1f", projection.maxDrift or 0)
+            .. " groundZ=" .. tostring(projection.groundZ ~= nil)
+            .. " visible=" .. tostring(projection.lastVisible)
+            .. " reason=" .. tostring(projection.reason))
+        Line("  screen=" .. (projection.lastX
+                and string.format("%.0f,%.0f", projection.lastX, projection.lastY) or "nil")
+            .. " projected=" .. tostring(projection.placements)
+            .. " failures=" .. tostring(projection.failures))
+    end
+
     -- Why the marker is not showing, as a tally. "noMainQuest" means nothing
     -- is selected; "noFacing" means this client gave up no facing at all and
     -- the player has not moved; anything zone-shaped means the quest is not
@@ -1931,7 +1948,7 @@ local function Handler(message)
         end
     elseif command == "waypoint" then
         if PQ:IsFeatureEnabled("mainQuestWaypoint")
-            and PQ:IsFeatureEnabled("hudWorldMarker") then
+            and (PQ:IsFeatureEnabled("hudWorldMarker") or Client.HasCameraProjection()) then
             ShowWaypoint(PQ.Trim(target) or "")
         else
             FeatureDisabledNotice()

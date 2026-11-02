@@ -4,6 +4,25 @@ Player-visible PandaQuest changes, newest first. Keep every bullet short, clear 
 
 ## Unreleased
 
+## 0.6.0
+
+### Changed
+
+- PandaQuest and PandaMap now share one panda minimap settings button without pandaUI.
+- With PandaTool installed, the HUD quest marker now follows camera tilt and zoom.
+- A ready quest's hand-in page now heads its reward panel "Rewards", like the completion page.
+- Clicking the Immersive Dialogue card only turns pages; accepting or completing needs the button or Space.
+
+### Fixed
+
+- The navigation arrow now points at the quest area centre, the same spot as the HUD marker.
+- Immersive Dialogue reward choices now remain clickable outside the Minimal theme.
+- The quest log's Follow button no longer cuts its label short.
+- The Alliance and Horde dialogue buttons now centre their label on the button face.
+- With pfUI's nameplates, the quest number now sits right beside the health bar instead of far off.
+- With pfUI's tooltip, quest progress is added inside pfUI's tooltip, keeping its border and health bar.
+- Spell and item tooltips sharing an NPC's name (e.g. Ancestral Spirit) no longer get a borderless box with a respawn timer.
+
 ## 0.5.5
 
 ### Changed

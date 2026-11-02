@@ -5,9 +5,12 @@ The options page, and which window draws it.
 
 Two hosts, ONE builder. If pandaUI is installed, PandaQuest registers its page
 with pandaUI's settings window and the player finds it in the same place as
-every other pandaUI option. If it is not, PandaQuest builds its own window and
-hands the SAME builder its own content frame. There is no second layout to keep
-in step, and neither addon depends on the other:
+every other pandaUI option. If it is not, the pages go to the shared Panda
+settings window (Libs/PandaSettings): one window drawn like pandaUI's, one
+panda button on the minimap, shared with every other Panda addon installed
+(PandaMap). Both hosts take the same registration calls and hand the SAME
+builder a content frame. There is no second layout to keep in step, and
+neither addon depends on the other:
 
   * pandaUI contains no reference to PandaQuest of any kind. Its settings API
     is push-only -- U.RegisterSettingsTab stores an id, a label and a build
@@ -44,12 +47,8 @@ local TAB_ID = "pandaquest"
 local TAB_LABEL = "PandaQuest"
 local SETTINGS_LOGO_TEXTURE =
     "Interface\\AddOns\\pandaQuest\\media\\Textures\\Settings\\PQ_logo"
-local SETTINGS_LOGO_SIZE = 20
 local SETTINGS_MASCOT_TEXTURE =
     "Interface\\AddOns\\pandaQuest\\media\\Textures\\Settings\\panda-quest"
-local SETTINGS_MASCOT_SIZE = 185
-local SETTINGS_MASCOT_ALPHA = 0.2
-local SETTINGS_MASCOT_INSET = 8
 -- The submenu's pages, one per section of the page. Under a settings group
 -- TAB_ID names the group, and these name the rows inside it.
 local GENERAL_PAGE_ID = TAB_ID .. ".general"
@@ -58,14 +57,14 @@ local DIALOGUE_PAGE_ID = TAB_ID .. ".dialogue"
 local MOBS_PAGE_ID = TAB_ID .. ".mobs"
 local SERVER_PAGE_ID = TAB_ID .. ".server"
 local HUD_MARKER_SETTINGS_VISIBLE = PQ:IsFeatureEnabled("hudWorldMarker")
+    or Client.HasCameraProjection()
 
 -- The page's own first line: "Panda Quest" in the addon's two-tone wordmark,
 -- with the running version after it. The split is the one the TOC Title already
 -- uses -- "Panda" white, "Quest" in the shared accent -- so the options page
--- names the addon the way the addon list does. pandaUI's menu row stays the
--- plain TAB_LABEL because that host draws it in a sidebar of its own rows; the
--- standalone window has no such row and titles its header with this wordmark
--- instead (see BuildWindow).
+-- names the addon the way the addon list does. The host's menu row stays the
+-- plain TAB_LABEL because it draws that in a sidebar of its own rows; this
+-- wordmark is the page title above the page.
 --
 -- Inline colour escapes rather than SetTextColor, because one region has to
 -- carry three colours where a heading region has one. Every span is closed, so
@@ -81,16 +80,19 @@ local function PageTitle()
         .. " |cff888888v" .. tostring(PQ.version) .. "|r"
 end
 
--- No hyphens, ever: the client mangles a widget name containing one.
-local WINDOW_NAME = "PandaQuestSettings"
-local HANDLE_NAME = "PandaQuestSettingsHandle"
-local CONTENT_NAME = "PandaQuestSettingsContent"
-local CLOSE_NAME = "PandaQuestSettingsClose"
-local MINIMAP_BUTTON_NAME = "PandaQuestMinimapButton"
+-- The art of the shared settings window this addon ships. Registered with
+-- the version of that copy, so the window reads the art of the copy it runs.
+local SHARED_MEDIA = "Interface\\AddOns\\pandaQuest\\Libs\\PandaSettings\\Media\\"
+do
+    local shared = Client.GetNamedObject("PandaSettings")
+    if type(shared) == "table" and type(shared.AddMediaRoot) == "function" then
+        shared.AddMediaRoot(SHARED_MEDIA, shared.lastLoadedMinor)
+    end
+end
 
 -- pandaUI's settings page width (U.SETTINGS_PAGE_WIDTH), registered as the
 -- page's pageWidth so pandaUI draws it unscaled, at the game's settings text
--- size; a wider page was shrunk to fit. The standalone window uses it too.
+-- size; a wider page was shrunk to fit. The shared window uses it too.
 local CONTENT_WIDTH = 460
 local CONTENT_HEIGHT = 428
 -- Text stops short of the content edge so future copy and localization cannot
@@ -98,35 +100,21 @@ local CONTENT_HEIGHT = 428
 local TEXT_WIDTH = CONTENT_WIDTH - 12
 
 local HOST_POLL_INTERVAL = 0.5
--- How long to keep looking for pandaUI before committing to our own window.
+-- How long to keep looking for pandaUI before settling on the shared window.
 -- Generous on purpose: this is a once-per-session decision and the job costs
 -- one global read every half second until it is made.
 local HOST_POLL_SECONDS = 15
 
-Settings.host = nil           -- nil while undecided, then "pandaui" or "standalone"
+-- nil while undecided, then "pandaui" or "shared". "shared" is taken at once
+-- when pandaUI is absent, so the panda minimap button is there straight
+-- away; a pandaUI found later in the poll still takes the pages over.
+Settings.host = nil
 Settings.hostWaited = 0
-Settings.window = nil
-Settings.handle = nil
-Settings.content = nil
-Settings.close = nil
--- The standalone host's built page: { widgets = { ... }, refresh = fn }.
--- pandaUI owns the lifecycle of its own copy and this stays nil there.
-Settings.page = nil
 Settings.opens = 0
-Settings.dragFailures = 0
 Settings.liveSliders = {}
 Settings.activePageTab = "general"
 Settings.mobSearchQuery = ""
 Settings.mobSearchPage = 1
--- The settings button beside the minimap, and what it ended up anchored to.
--- Built straight away while the host poll runs so a standalone install never
--- makes the player wait through the full late-pandaUI grace period. If
--- pandaUI is found, its own identical button takes over and this one hides.
-Settings.minimapButton = nil
-Settings.minimapAnchor = nil
--- The language flags in the standalone window's header, and nothing at all in
--- the pandaUI host: see BuildLanguageSelector.
-Settings.languageButtons = {}
 
 local function Config()
     return PQ:GetModule("Config")
@@ -158,12 +146,31 @@ local function PandaUI()
     return host
 end
 
--- One of pandaUI's shared settings components (U.CreateCheckbox,
--- U.CreateRadioGroup, U.CreateSlider), or nil. When pandaUI hosts the page,
--- its Game Settings window restyles exactly these components, so using them is
--- what makes this page's controls match every other settings page there.
+-- The shared Panda settings window (Libs/PandaSettings), only if it can host.
+local function SharedHost()
+    local host = Client.GetNamedObject("PandaSettings")
+    if type(host) ~= "table" or type(host.RegisterSettingsTab) ~= "function" then
+        return nil
+    end
+    return host
+end
+
+-- Whichever window is hosting the page, or nil while undecided.
+local function Host()
+    if Settings.host == "pandaui" then
+        return PandaUI()
+    elseif Settings.host == "shared" then
+        return SharedHost()
+    end
+    return nil
+end
+
+-- One of the host's settings components (CreateCheckbox, CreateRadioGroup,
+-- CreateSlider, CreateDropdown), or nil. Both hosts draw them in pandaUI's
+-- Game Settings style, so using them is what makes this page's controls match
+-- every other settings page there.
 local function HostComponent(name)
-    local host = PandaUI()
+    local host = Host()
     if host and type(host[name]) == "function" then
         return host[name]
     end
@@ -180,7 +187,7 @@ end
 -- A continuous value uses page.Slider and supplies its live apply callback.
 -- There is no offset to recompute, no widget name
 -- to invent, no refresh function to extend, and nothing to add for the second
--- window -- pandaUI and the standalone window both call this same builder, so
+-- window -- pandaUI and the shared Panda window both call this same builder, so
 -- an option added here appears in whichever one is hosting the page, this
 -- session and every session after.
 --
@@ -323,7 +330,7 @@ local function WidgetName(key)
 end
 
 -- Shows one page region and every separately-owned part it carries. This is
--- needed both by the standalone host and by the page's internal General/Mob
+-- needed both by the hosts and by the page's internal General/Mob
 -- Tracking tabs: parent visibility does not reliably reach children here.
 local function SetRegionShown(region, shown)
     if not region then
@@ -432,7 +439,7 @@ local function NewPage(parent)
     end
 
     -- Optional client component status. pandaUI supplies the same public
-    -- component used for its Nampower status; the standalone page keeps an
+    -- component used for its Nampower status; other hosts get an
     -- equivalent text fallback so PandaQuest never depends on pandaUI.
     page.OptionalStatus = function(options)
         options = options or {}
@@ -509,6 +516,9 @@ local function NewPage(parent)
                 value = Setting(key) and true or false,
                 onChange = function(checked)
                     Store(key, checked and true or false)
+                    if type(layout.onChange) == "function" then
+                        layout.onChange(checked and true or false)
+                    end
                     -- Controls that depend on this switch re-read it.
                     page.Refresh()
                 end,
@@ -525,6 +535,9 @@ local function NewPage(parent)
                 left, page.y, width,
                 function(checked)
                     Store(key, checked)
+                    if type(layout.onChange) == "function" then
+                        layout.onChange(checked and true or false)
+                    end
                     page.Refresh()
                 end)
             SyncBox = function()
@@ -780,8 +793,8 @@ local function NewPage(parent)
         if not button then
             return nil
         end
-        -- pandaUI paints its own hover glow on the buttons it hosts.
-        button.pandaQuestHostHover = Settings.host == "pandaui"
+        -- Both hosts paint their own hover glow on the buttons they host.
+        button.pandaQuestHostHover = Settings.host ~= nil
         page.Add(button)
         page.y = page.y - advance
         return button
@@ -798,12 +811,12 @@ local function NewPage(parent)
         return control
     end
 
-    -- The real pandaUI component is used when that addon hosts this page.
-    -- Standalone uses Client.CreateSettingsSlider, the imported equivalent in
-    -- the compatibility layer. Both expose the same current/SetPoint/SetValue
-    -- surface, so binding and live application stay host-independent.
+    -- The hosting window's slider component. Client.CreateSettingsSlider, the
+    -- imported equivalent in the compatibility layer, is the fallback. All
+    -- expose the same current/SetPoint/SetValue surface, so binding and live
+    -- application stay host-independent.
     page.Slider = function(key, text, minimum, maximum, step, onLive, layout)
-        local host = PandaUI()
+        local host = Host()
         local createSlider = host and type(host.CreateSlider) == "function"
             and host.CreateSlider or Client.CreateSettingsSlider
         if type(createSlider) ~= "function" then
@@ -898,25 +911,25 @@ end
 --
 -- The contract is pandaUI's (modules/settings.lua, RegisterSettingsTab):
 -- build(parent) returns the array of regions the page owns, and optionally a
--- refresh function that runs every time the page is opened. The standalone
+-- refresh function that runs every time the page is opened. The shared Panda
 -- window honours the same contract, so this builder never learns which host
 -- called it -- it is handed a parent frame and anchors everything to that.
 --
 -- The page is two sections, General and Mob tracking, each built by its own
--- function below. Where they are switched is the host's business: the
--- standalone window has no sidebar, so it gets both sections under an
--- internal tab strip; pandaUI's sidebar already is a list of pages, so it gets
--- an "PandaQuest" submenu with one page per section and no strip at all.
+-- function below. Where they are switched is the host's business: a host
+-- without settings groups gets both sections under an internal tab strip;
+-- a host sidebar that is a list of pages gets a "PandaQuest" submenu with
+-- one page per section and no strip at all.
 
--- The height a section may fill. pandaUI can hand a builder a panel much
--- taller than the standalone 428px content box; a host that reports less
+-- The height a section may fill. A host can hand a builder a panel much
+-- taller than the 428px content box; a host that reports less
 -- (or nothing) is held to that box.
 local function AvailableHeight(parent)
     -- pandaUI's canvas frame is TALLER than the box the player actually sees,
     -- because that window fits its pages by scale. Sizing to the parent there
     -- is what gave this page a scrollbar, so the host is asked for the height
     -- that fits (user request, 2026-09-23: this page must not scroll).
-    local host = PandaUI()
+    local host = Host()
     if host and type(host.GetIntegratedSettingsPageHeight) == "function" then
         local ok, visible = pcall(host.GetIntegratedSettingsPageHeight)
         if ok and type(visible) == "number" and visible >= CONTENT_HEIGHT then
@@ -1089,6 +1102,15 @@ local function BuildGeneralSection(page)
         { width = pairWidth, advance = 0 })
     page.Checkbox("questRewardGearAdvisor", PQ.L("SETTINGS_REWARD_GEAR_ADVISOR"), nil,
         { left = PAIR_COLUMN_RIGHT, width = rightWidth, advance = CHECKBOX_ADVANCE })
+
+    -- The one panda button every Panda addon shares; pandaUI has its own.
+    if Settings.host == "shared" then
+        page.Checkbox("minimapButton", PQ.L("SETTINGS_MINIMAP_BUTTON"), nil,
+            { width = TEXT_WIDTH, advance = CHECKBOX_ADVANCE,
+              onChange = function(checked)
+                  Settings:SetMinimapButtonEnabled(checked)
+              end })
+    end
 end
 
 local function BuildHUDSection(page)
@@ -1101,10 +1123,18 @@ local function BuildHUDSection(page)
         missingText = PQ.L("SETTINGS_CLASSICAPI_NOT_DETECTED"),
         detected = Client.GetClassicAPIStatus,
     })
+    page.OptionalStatus({
+        header = PQ.L("SETTINGS_CLASSICAPI_HEADER"),
+        name = "PandaTool",
+        note = PQ.L("SETTINGS_PANDATOOL_HINT"),
+        detectedText = PQ.L("SETTINGS_CLASSICAPI_DETECTED"),
+        missingText = PQ.L("SETTINGS_CLASSICAPI_NOT_DETECTED"),
+        detected = Client.HasCameraProjection,
+    })
     local marker = page.Checkbox("waypointEnabled", PQ.L("SETTINGS_HUD_MARKER"),
         PQ.L("SETTINGS_HUD_MARKER_NOTE"))
     page.Sync(function()
-        local detected = Client.GetClassicAPIStatus()
+        local detected = Client.GetClassicAPIStatus() or Client.HasCameraProjection()
         page.SetCheckboxEnabled(marker, detected and true or false)
     end)
 end
@@ -1256,7 +1286,7 @@ local function BuildMobSection(page, MobsShown)
     -- The results are a plain table (Client.CreateSettingsListRow): touching
     -- rows, every second one striped, no button chrome per line.
     --
-    -- pandaUI can hand this builder a panel much taller than the standalone
+    -- A host can hand this builder a panel much taller than the
     -- 428px content box, and its final height is only known a tick after the
     -- page is shown. So the row count is not fixed here: FitMobRows reads the
     -- host height on every refresh, makes rows on demand, and moves the
@@ -1296,7 +1326,7 @@ local function BuildMobSection(page, MobsShown)
                 end
             end, MOB_FIT.textDrop)
         -- A row made after the build still belongs to this section's group,
-        -- so the standalone tab strip hides it with the rest.
+        -- so the internal tab strip hides it with the rest.
         local saved = page.currentGroup
         page.currentGroup = mobGroup
         page.Add(line)
@@ -1492,9 +1522,9 @@ local function BuildMobSection(page, MobsShown)
 end
 
 -- `section` nil builds the whole page, every section under the internal tab
--- strip: the standalone window, and an pandaUI without settings groups.
--- A named section builds that section alone with no strip, for a page of
--- pandaUI's submenu, where the sidebar rows are the tabs.
+-- strip: a pandaUI without settings groups. A named section builds that
+-- section alone with no strip, for a page of the host's submenu, where the
+-- sidebar rows are the tabs.
 function Settings:BuildPage(parent, section)
     if not parent then
         return {}, nil
@@ -1509,10 +1539,6 @@ function Settings:BuildPage(parent, section)
     end
 
     local page = NewPage(parent)
-    if self.host == "standalone" then
-        page.Add(Client.CreateSettingsWatermark(parent, SETTINGS_MASCOT_TEXTURE,
-            SETTINGS_MASCOT_SIZE, SETTINGS_MASCOT_ALPHA, SETTINGS_MASCOT_INSET))
-    end
     -- A whole page replaces the live slider bindings; a section adds to them,
     -- because under the submenu the other section may already be built and
     -- bound, and dropping its sliders would stop them applying live.
@@ -1528,14 +1554,8 @@ function Settings:BuildPage(parent, section)
     local RefreshMobResults, mobSearchInput
 
     -- The page draws no wordmark heading of its own: both hosts already title
-    -- it with PageTitle -- the standalone window in its header (BuildWindow),
-    -- pandaUI's Game Settings window in its page title (user request,
-    -- 2026-09-23) -- so a heading here would show the same line twice.
-    if self.host == "standalone" then
-        -- No heading to sit under here, so the tab strip would otherwise butt
-        -- right against the header rule. A little breathing room instead.
-        page.Gap(7)
-    end
+    -- it with PageTitle in their page title (user request, 2026-09-23), so a
+    -- heading here would show the same line twice.
 
     local function MobsShown()
         if section then
@@ -1655,8 +1675,8 @@ function Settings:BuildPage(parent, section)
         end)
     end
 
-    -- Only the standalone host is a fixed, non-scrolling box; pandaUI's
-    -- canvas shows a scroll bar, so an overflow there is not cut off.
+    -- Both hosts' canvases show a scroll bar, so an overflow there is not cut
+    -- off; only a host that reports no page height is a fixed box.
     local availableHeight, hostScrolls = AvailableHeight(parent)
     self.pageHeight = generalHeight
     if hudHeight > self.pageHeight then
@@ -1680,7 +1700,7 @@ function Settings:BuildPage(parent, section)
 end
 
 -- pandaUI updates its slider's `current` value from its own shared driver;
--- the standalone import exposes RefreshDrag for the same purpose. Comparing
+-- the shared window and the compatibility import expose RefreshDrag for the same purpose. Comparing
 -- that live display value here makes the setting and tracker texture follow
 -- the thumb continuously, while the drag is still in progress.
 function Settings:RefreshLiveSliders()
@@ -1706,41 +1726,66 @@ end
 
 -- Host resolution -----------------------------------------------------------
 
--- Once. Where pandaUI has settings groups, PandaQuest is an "PandaQuest"
--- submenu in its sidebar with one page per visible section --
--- the sidebar rows replace the internal tab strip. An pandaUI without
+-- What the shared window reads beyond pandaUI's contract: this addon's stored
+-- values (the window position and the shared minimap button), its languages
+-- and the tooltip line of the panda button.
+function Settings:AddSharedOptions(options)
+    options.get = Setting
+    options.set = Store
+    options.languages = PQ.GetLanguages()
+    options.getLanguage = PQ.GetLanguage
+    options.setLanguage = function(code, quiet)
+        if not PQ.SetLanguage(code) then
+            return false
+        end
+        if not quiet then
+            PQ:Print(PQ.L("SETTINGS_LANGUAGE_CHANGED", PQ.GetLanguageLabel(code)))
+            PQ:Print(PQ.L("SETTINGS_LANGUAGE_RELOAD"))
+        end
+        return true
+    end
+    options.minimapTooltip = function()
+        return PQ.L("SETTINGS_MINIMAP_TOOLTIP")
+    end
+end
+
+-- Once per host. Where the host has settings groups, PandaQuest is a
+-- "PandaQuest" submenu in its sidebar with one page per visible section --
+-- the sidebar rows replace the internal tab strip. A pandaUI without
 -- RegisterSettingsGroup gets the whole tabbed page as a single row instead.
 -- The guard means a re-entered resolution cannot file a duplicate id and get
 -- itself refused.
 --
 -- Both pages are placed explicitly `after` the group, so they sit under it
--- whatever pandaUI's default placement for a new entry is.
-function Settings:RegisterWithPandaUI(host)
-    if self.registered then
+-- whatever the host's default placement for a new entry is.
+function Settings:RegisterWithHost(host)
+    if self.registeredHost == host then
         return true
     end
 
     if type(host.RegisterSettingsGroup) == "function" then
-        -- `after = "profiles"` keeps the group last in the sidebar (pandaUI
-        -- slots groups ahead of profiles by default); `defaultPage` opens
-        -- General when the group is clicked. An pandaUI that predates the
+        -- `after = "profiles"` keeps the group last in pandaUI's sidebar
+        -- (pandaUI slots groups ahead of profiles by default); `defaultPage`
+        -- opens General when the group is clicked. A pandaUI that predates the
         -- options table ignores it and keeps its own placement.
         --
         -- `category`, `icon`, `version` and `title` make the group its own
-        -- category in pandaUI's Game Settings window, headed like pandaUI's
-        -- own (logo, name, dimmed version) with the wordmark as page title.
-        -- An pandaUI without addon categories ignores them.
-        local ok, group = pcall(host.RegisterSettingsGroup, TAB_ID, TAB_LABEL,
-            {
-                after = "profiles",
-                defaultPage = GENERAL_PAGE_ID,
-                category = true,
-                icon = SETTINGS_LOGO_TEXTURE,
-                watermark = SETTINGS_MASCOT_TEXTURE,
-                pageWidth = CONTENT_WIDTH,
-                version = function() return PQ.version end,
-                title = PageTitle,
-            })
+        -- category in the Game Settings window, headed like pandaUI's own
+        -- (logo, name, dimmed version) with the wordmark as page title.
+        local options = {
+            after = "profiles",
+            defaultPage = GENERAL_PAGE_ID,
+            category = true,
+            icon = SETTINGS_LOGO_TEXTURE,
+            watermark = SETTINGS_MASCOT_TEXTURE,
+            pageWidth = CONTENT_WIDTH,
+            version = function() return PQ.version end,
+            title = PageTitle,
+        }
+        if host == SharedHost() then
+            self:AddSharedOptions(options)
+        end
+        local ok, group = pcall(host.RegisterSettingsGroup, TAB_ID, TAB_LABEL, options)
         if not ok or not group then
             return false
         end
@@ -1779,7 +1824,7 @@ function Settings:RegisterWithPandaUI(host)
             or not okMobs or not mobs or not okServer or not serverPage then
             return false
         end
-        self.registered = true
+        self.registeredHost = host
         self.hostLayout = "group"
         return true
     end
@@ -1793,29 +1838,43 @@ function Settings:RegisterWithPandaUI(host)
     if not ok or not entry then
         return false
     end
-    self.registered = true
+    self.registeredHost = host
     self.hostLayout = "tab"
     return true
 end
 
--- Decides the host, once. `force` is what ends the search: without it, an absent
--- pandaUI leaves the decision open so the poll can try again.
+-- Leaves the shared window when pandaUI turns up later in the poll. Pages
+-- built there go with it; pandaUI builds its own.
+function Settings:LeaveSharedHost()
+    if self.host ~= "shared" then
+        return
+    end
+    local shared = SharedHost()
+    if shared and type(shared.UnregisterSettingsGroup) == "function" then
+        pcall(shared.UnregisterSettingsGroup, TAB_ID)
+    end
+    self.host = nil
+    self.registeredHost = nil
+    self.liveSliders = {}
+end
+
+-- pandaUI when it is there, the shared window otherwise. The shared window is
+-- taken at once; `force` only ends the wait for a late pandaUI.
 --
 -- pandaUI being PRESENT ends the search either way -- if it is there and still
 -- refuses the page, retrying would only repeat its own error output every half
 -- second.
 function Settings:ResolveHost(force)
-    if self.host then
+    if self.host == "pandaui" or self.hostSettled then
         return self.host
     end
 
-    local host = PandaUI()
-    if host then
-        if self:RegisterWithPandaUI(host) then
+    local pandaUI = PandaUI()
+    if pandaUI then
+        self.hostSettled = true
+        self:LeaveSharedHost()
+        if self:RegisterWithHost(pandaUI) then
             self.host = "pandaui"
-            if self.minimapButton then
-                Client.HideObject(self.minimapButton)
-            end
             PQ:DeclareCapability("pandaUISettingsHost", "detected",
                 "pandaUI was found at runtime and accepted PandaQuest's options page "
                 .. (self.hostLayout == "group"
@@ -1825,358 +1884,32 @@ function Settings:ResolveHost(force)
                 .. "pandaUI's settings window; /pq config opens it there. Detected by type-checking "
                 .. "the function this needs, not by IsAddOnLoaded, which is "
                 .. "DOCUMENTED_NOT_RUNTIME_VERIFIED here and would only report that files loaded")
-        else
-            self.host = "standalone"
-            PQ:DeclareCapability("pandaUISettingsHost", "missing",
-                "pandaUI is present but refused the options page -- a page already registered under "
-                .. "the id '" .. TAB_ID .. "' is the only documented reason. PandaQuest's own "
-                .. "settings window is used instead")
-            PQ:Warn(PQ.L("SETTINGS_WARN_UNREALUI_REFUSED"))
-            self:EnsureMinimapButton()
+            return self.host
         end
-        return self.host
+        PQ:DeclareCapability("pandaUISettingsHost", "missing",
+            "pandaUI is present but refused the options page -- a page already registered under "
+            .. "the id '" .. TAB_ID .. "' is the only documented reason. The shared Panda "
+            .. "settings window is used instead")
+        PQ:Warn(PQ.L("SETTINGS_WARN_UNREALUI_REFUSED"))
     end
 
-    if force then
-        self.host = "standalone"
+    if self.host ~= "shared" then
+        local shared = SharedHost()
+        if shared and self:RegisterWithHost(shared) then
+            self.host = "shared"
+        end
+    end
+    if force and not pandaUI then
+        self.hostSettled = true
         PQ:DeclareCapability("pandaUISettingsHost", "missing",
             "pandaUI was not present after " .. HOST_POLL_SECONDS .. "s of polling, so PandaQuest "
-            .. "draws its options in its own window. Polled rather than read once at load: nothing "
-            .. "establishes the two addons' load order, the client's TOC dependency fields have no "
-            .. "record in the compatibility database, and ADDON_LOADED has no probed record here")
-        self:EnsureMinimapButton()
+            .. "draws its options in the shared Panda settings window (Libs/PandaSettings), "
+            .. "opened by the panda button on the minimap. Polled rather than read once at "
+            .. "load: nothing establishes the two addons' load order, the client's TOC "
+            .. "dependency fields have no record in the compatibility database, and "
+            .. "ADDON_LOADED has no probed record here")
     end
     return self.host
-end
-
--- The minimap button --------------------------------------------------------
---
--- Built the moment the host settles on "standalone", and never otherwise. With
--- pandaUI installed its own settings button is already beside the minimap and
--- already opens the window that now holds this page, so a second button there
--- would be two controls for one destination -- and both would want the same
--- spot beside the map.
-
-function Settings:ApplyMinimapButton()
-    local button = self.minimapButton
-    if not button then
-        return false
-    end
-    if Setting("minimapButton") == false then
-        return Client.HideObject(button)
-    end
-    return Client.ShowObject(button)
-end
-
-function Settings:EnsureMinimapButton()
-    if self.minimapButton then
-        return self.minimapButton
-    end
-    local button, anchor = Client.CreateMinimapButton(MINIMAP_BUTTON_NAME,
-        "Interface\\ICONS\\INV_Misc_Gear_01")
-    if not button then
-        PQ:Debug("no settings button could be created beside the minimap")
-        return nil
-    end
-    self.minimapButton = button
-    self.minimapAnchor = anchor
-    PQ:Debug("settings button anchored to " .. tostring(anchor))
-
-    Client.SetObjectScript(button, "OnClick", function()
-        Settings:Toggle()
-    end)
-    -- Chained, not replaced: the button was created with its own OnEnter/OnLeave
-    -- driving the accent hover border, and Client.ChainScript is the layer's
-    -- existing way to add a handler without dropping the one already there.
-    Client.ChainScript(button, "OnEnter", function()
-        Client.ShowGameTooltip(button, {
-            { text = TAB_LABEL, r = PQ.colors.accent[1], g = PQ.colors.accent[2],
-              b = PQ.colors.accent[3] },
-            { text = PQ.L("SETTINGS_MINIMAP_TOOLTIP"), r = 0.7, g = 0.7, b = 0.7 },
-        }, "ANCHOR_LEFT")
-    end)
-    Client.ChainScript(button, "OnLeave", function()
-        Client.HideGameTooltip(button)
-    end)
-
-    self:ApplyMinimapButton()
-    return button
-end
-
--- The language selector ------------------------------------------------------
---
--- Four flat flags in the top-right of this window's header, opposite the
--- addon name. Not a dropdown: there are only four languages, and a player who
--- has just landed in one they cannot read needs the way back to be visible on
--- screen rather than one click inside a closed control.
---
--- ONLY IN THIS WINDOW. With pandaUI installed the language is whatever is set
--- there (Core/Locale.lua), and a second selector would be two controls writing
--- one value -- only one of which pandaUI would honour. PQ.SetLanguage refuses
--- the write in that case as well, so the two guards agree.
---
--- Changing the language does not retranslate what is already on screen: every
--- label in this addon is written once when its frame is built. The chat line
--- asking for a /reload is the whole of the confirmation, deliberately printed
--- in the language just chosen -- if the client's font has no glyphs for it, an
--- unreadable line is the fastest possible signal that this language will not
--- render, and the English flag is one visible click away.
-
-local FLAG_WIDTH = 18
-local FLAG_HEIGHT = 14
-local FLAG_GAP = 3
-local FLAG_RIGHT_INSET = 12
-
--- What the drag handle has to give up so these stay clickable. The handle
--- covers the header and is raised above it, so without this it would take
--- every click on the row.
-local function LanguageSelectorInset()
-    local count = table.getn(PQ.GetLanguages())
-    return FLAG_RIGHT_INSET + count * (FLAG_WIDTH + FLAG_GAP)
-end
-
--- Selection is communicated only through opacity: full for the active
--- language, 30% for the others, 95% while an inactive one is hovered -- so
--- pointing at the current choice never makes it look weaker.
-local FLAG_SHADE_SELECTED = 1
-local FLAG_SHADE_IDLE = 0.3
-local FLAG_SHADE_HOVER = 0.95
-
-function Settings:RefreshLanguageButtons()
-    local active = PQ.GetLanguage()
-    local index = 1
-    local total = table.getn(self.languageButtons)
-    while index <= total do
-        local button = self.languageButtons[index]
-        local selected = button.pandaQuestLanguage == active
-        button.pandaQuestSelected = selected
-        Client.SetFlagButtonShade(button,
-            selected and FLAG_SHADE_SELECTED or FLAG_SHADE_IDLE, selected)
-        index = index + 1
-    end
-end
-
-function Settings:BuildLanguageSelector(window)
-    if PQ.IsLanguageFollowingPandaUI() then
-        return
-    end
-
-    local languages = PQ.GetLanguages()
-    local count = table.getn(languages)
-    -- Centred in the header strip: half the slack between its height and the
-    -- flag's, so the row follows the header height rather than a fixed inset.
-    local header = Client.GetSettingsMetrics()
-    local flagTop = (header - FLAG_HEIGHT) / 2
-    local index = 1
-    while index <= count do
-        local entry = languages[index]
-        -- Captured per row: the closures below outlive this iteration.
-        local code = entry.code
-        local label = entry.label
-
-        local button = Client.CreateFlagButton(window,
-            "PandaQuestSettingsLanguage" .. code,
-            PQ.FlagTexture(code), entry.short, FLAG_WIDTH, FLAG_HEIGHT,
-            function()
-                if not PQ.SetLanguage(code) then
-                    return
-                end
-                Settings:RefreshLanguageButtons()
-                PQ:Print(PQ.L("SETTINGS_LANGUAGE_CHANGED", label))
-                PQ:Print(PQ.L("SETTINGS_LANGUAGE_RELOAD"))
-            end)
-        if button then
-            button.pandaQuestLanguage = code
-            -- Right to left from the header's right edge, so the row keeps its
-            -- inset however many languages are registered.
-            Client.AnchorObject(button, "TOPRIGHT", window, "TOPRIGHT",
-                -FLAG_RIGHT_INSET - (count - index) * (FLAG_WIDTH + FLAG_GAP),
-                -flagTop)
-            Client.SetObjectScript(button, "OnEnter", function()
-                if button.pandaQuestSelected then
-                    return
-                end
-                Client.SetFlagButtonShade(button, FLAG_SHADE_HOVER, false)
-            end)
-            Client.SetObjectScript(button, "OnLeave", function()
-                if button.pandaQuestSelected then
-                    return
-                end
-                Client.SetFlagButtonShade(button, FLAG_SHADE_IDLE, false)
-            end)
-            table.insert(self.languageButtons, button)
-        end
-        index = index + 1
-    end
-
-    self:RefreshLanguageButtons()
-end
-
--- Shown and hidden with the window explicitly, never left to the parent. The
--- rest of this file already refuses to rely on a parent's visibility reaching
--- its children (SetRegionShown's note, rendering.parent_alpha_not_propagated),
--- and a flag that outlived its closed window would sit on the screen with
--- nothing behind it.
-function Settings:SetLanguageSelectorShown(shown)
-    local index = 1
-    local total = table.getn(self.languageButtons)
-    while index <= total do
-        if shown then
-            Client.ShowObject(self.languageButtons[index])
-        else
-            Client.HideObject(self.languageButtons[index])
-        end
-        index = index + 1
-    end
-end
-
--- The standalone window -----------------------------------------------------
-
-function Settings:ApplyStoredPosition()
-    local window = self.window
-    if not window then
-        return false
-    end
-    local point = Setting("settingsPoint")
-    local relativePoint = Setting("settingsRelativePoint")
-    local x = Setting("settingsX")
-    local y = Setting("settingsY")
-    if type(point) ~= "string" or type(x) ~= "number" or type(y) ~= "number" then
-        return false
-    end
-    -- Always UIParent-relative, same rule as the tracker: a relative frame is a
-    -- live object that cannot be persisted, and anchoring to another addon's
-    -- frame would break the moment that addon is not loaded.
-    local applied, placedX, placedY, moved = Client.SetFrameAnchor(window, point,
-        "UIParent", type(relativePoint) == "string" and relativePoint or point, x, y)
-    -- A stored position that left the window off screen was pulled back on;
-    -- keep the corrected one so it opens there next time too.
-    if applied and moved then
-        Store("settingsX", placedX)
-        Store("settingsY", placedY)
-    end
-    return applied
-end
-
-function Settings:CapturePosition()
-    local window = self.window
-    if not window then
-        return false
-    end
-    local point, relativeName, relativePoint, x, y = Client.GetFrameAnchor(window)
-    if type(point) ~= "string" or type(x) ~= "number" or type(y) ~= "number" then
-        PQ:Warn(PQ.L("SETTINGS_WARN_NO_POSITION"))
-        return false
-    end
-    -- relativeName is read but not stored: whatever the drag left the window
-    -- anchored to is normalized back to UIParent on the way in.
-    Store("settingsPoint", point)
-    Store("settingsRelativePoint", type(relativePoint) == "string" and relativePoint or point)
-    Store("settingsX", x)
-    Store("settingsY", y)
-    -- Re-placed from what was just stored, so a drop past a screen edge snaps
-    -- flush with it, as the navigator does (Client.KeepFrameOnScreen).
-    self:ApplyStoredPosition()
-    return true
-end
-
-function Settings:ResetPosition()
-    Store("settingsPoint", "CENTER")
-    Store("settingsRelativePoint", "CENTER")
-    Store("settingsX", 0)
-    Store("settingsY", 0)
-    self:ApplyStoredPosition()
-end
-
-function Settings:BuildWindow()
-    if self.window then
-        return self.window
-    end
-
-    local header, footer, padding = Client.GetSettingsMetrics()
-    local window = Client.CreateSettingsWindow(WINDOW_NAME,
-        CONTENT_WIDTH + padding * 2, CONTENT_HEIGHT + header + footer)
-    if not window then
-        PQ:Warn(PQ.L("SETTINGS_WARN_NO_WINDOW"))
-        return nil
-    end
-    self.window = window
-    -- Standalone only. The wordmark and version, not the plain TAB_LABEL: this
-    -- window IS the addon's face when pandaUI is absent, so its header names
-    -- the addon the way the addon list and the page's first line do. With
-    -- pandaUI hosting, that host owns the menu row and this window is unused.
-    Client.SetSettingsTitle(window, PageTitle())
-    Client.SetSettingsTitleLogo(window, SETTINGS_LOGO_TEXTURE, SETTINGS_LOGO_SIZE)
-
-    -- The handle stops short of the flag row so the header is draggable
-    -- everywhere except where those buttons are. When pandaUI owns the
-    -- language there is no row and the handle takes the whole strip.
-    local handleInset = 0
-    if not PQ.IsLanguageFollowingPandaUI() then
-        handleInset = LanguageSelectorInset()
-    end
-    local handle = Client.CreateSettingsHandle(window, HANDLE_NAME, handleInset)
-    if handle then
-        self.handle = handle
-        Client.SetObjectScript(handle, "OnDragStart", function()
-            if not Client.StartFrameDrag(window) then
-                Settings.dragFailures = Settings.dragFailures + 1
-                -- Visible, never debug-only: a drag that silently does nothing
-                -- is the exact failure this client already produced once.
-                PQ:Warn(PQ.L("SETTINGS_WARN_DRAG_FAILED"))
-            end
-        end)
-        Client.SetObjectScript(handle, "OnDragStop", function()
-            Client.StopFrameDrag(window)
-            Settings:CapturePosition()
-        end)
-    else
-        PQ:Warn(PQ.L("SETTINGS_WARN_NO_HANDLE"))
-    end
-
-    local close = Client.CreateTextButton(window, CLOSE_NAME, 80, 22, PQ.L("COMMON_CLOSE"))
-    if close then
-        self.close = close
-        Client.AnchorObject(close, "BOTTOMRIGHT", window, "BOTTOMRIGHT", -padding, padding)
-        Client.SetObjectScript(close, "OnClick", function()
-            Settings:Close()
-        end)
-    end
-
-    self:BuildLanguageSelector(window)
-
-    self.content = Client.CreateSettingsContent(window, CONTENT_NAME)
-
-    if not self:ApplyStoredPosition() then
-        self:ResetPosition()
-    end
-    return window
-end
-
--- Builds the page into the standalone window the first time it is opened.
--- pandaUI builds its own copy lazily too, on first selection of the row.
-function Settings:EnsurePage()
-    if self.page then
-        return self.page
-    end
-    if not self.content then
-        return nil
-    end
-    local widgets, refresh = self:BuildPage(self.content)
-    self.page = { widgets = widgets or {}, refresh = refresh }
-    return self.page
-end
-
-local function SetPageShown(page, shown)
-    if not page then
-        return
-    end
-    local index = 1
-    local total = table.getn(page.widgets)
-    while index <= total do
-        SetRegionShown(page.widgets[index], shown)
-        index = index + 1
-    end
 end
 
 -- Opening and closing -------------------------------------------------------
@@ -2184,101 +1917,111 @@ end
 function Settings:Open()
     -- force: the player asked for the window now, so the decision cannot wait
     -- out the rest of the poll.
-    local host = self:ResolveHost(true)
+    local hostName = self:ResolveHost(true)
     self.opens = self.opens + 1
+    local host = Host()
+    if not host then
+        PQ:Warn(PQ.L("SETTINGS_WARN_NO_WINDOW"))
+        return false
+    end
 
-    if host == "pandaui" then
-        local pandaUI = PandaUI()
-        if pandaUI and type(pandaUI.OpenSettingsPage) == "function" then
-            -- Under the submenu, back to the section the player last opened.
-            local pageId = TAB_ID
-            if self.hostLayout == "group" then
-                pageId = GENERAL_PAGE_ID
-                if HUD_MARKER_SETTINGS_VISIBLE and self.activePageTab == "hud" then
-                    pageId = HUD_PAGE_ID
-                elseif self.activePageTab == "mobs" then
-                    pageId = MOBS_PAGE_ID
-                elseif self.activePageTab == "dialogue" then
-                    pageId = DIALOGUE_PAGE_ID
-                elseif self.activePageTab == "server" then
-                    pageId = SERVER_PAGE_ID
-                end
-            end
-            local ok, opened = pcall(pandaUI.OpenSettingsPage, pageId)
-            if ok and opened then
-                return true
-            end
+    -- Under the submenu, back to the section the player last opened.
+    local pageId = TAB_ID
+    if self.hostLayout == "group" then
+        pageId = GENERAL_PAGE_ID
+        if HUD_MARKER_SETTINGS_VISIBLE and self.activePageTab == "hud" then
+            pageId = HUD_PAGE_ID
+        elseif self.activePageTab == "mobs" then
+            pageId = MOBS_PAGE_ID
+        elseif self.activePageTab == "dialogue" then
+            pageId = DIALOGUE_PAGE_ID
+        elseif self.activePageTab == "server" then
+            pageId = SERVER_PAGE_ID
         end
-        if pandaUI and type(pandaUI.OpenSettings) == "function" then
-            -- Opens the panel without being able to select our row. Better than
-            -- nothing: the row is in the list the player is now looking at.
-            local ok = pcall(pandaUI.OpenSettings, true)
+    end
+    if type(host.OpenSettingsPage) == "function" then
+        local ok, opened = pcall(host.OpenSettingsPage, pageId)
+        if ok and opened then
+            return true
+        end
+    end
+    if hostName == "pandaui" then
+        if type(host.OpenSettings) == "function" then
+            -- Opens the panel without being able to select our row. Better
+            -- than nothing: the row is in the list the player is now seeing.
+            local ok = pcall(host.OpenSettings, true)
             if ok then
                 return true
             end
         end
         PQ:Print(PQ.L("SETTINGS_IN_UNREALUI"))
-        return false
     end
-
-    if not self:BuildWindow() then
-        return false
-    end
-    local page = self:EnsurePage()
-    SetPageShown(page, true)
-    self:SetLanguageSelectorShown(true)
-    if page and type(page.refresh) == "function" then
-        page.refresh()
-    end
-    return Client.ShowObject(self.window)
+    return false
 end
 
+-- pandaUI's panel has no public close, and reaching past its API to hide its
+-- frame would be exactly the coupling this module avoids.
 function Settings:Close()
-    if self.host == "pandaui" then
-        -- pandaUI's panel has no public close, and reaching past its API to
-        -- hide its frame would be exactly the coupling this module avoids.
+    local shared = self.host == "shared" and SharedHost()
+    if not shared or type(shared.CloseSettings) ~= "function" then
         return false
     end
-    if not self.window then
+    local ok, closed = pcall(shared.CloseSettings)
+    return ok and closed and true or false
+end
+
+function Settings:IsOpen()
+    local shared = self.host == "shared" and SharedHost()
+    if not shared or type(shared.IsSettingsShown) ~= "function" then
         return false
     end
-    SetPageShown(self.page, false)
-    self:SetLanguageSelectorShown(false)
-    return Client.HideObject(self.window)
+    local ok, shown = pcall(shared.IsSettingsShown)
+    return ok and shown and true or false
 end
 
 function Settings:Toggle()
-    if self.window and self.host ~= "pandaui" and Client.IsObjectShown(self.window) then
+    if self:IsOpen() then
         return self:Close()
     end
     return self:Open()
 end
 
 function Settings:GetReport()
+    local shared = self.host == "shared" and SharedHost()
+    local anchor
+    if shared and type(shared.GetMinimapButtonAnchor) == "function" then
+        local ok, value = pcall(shared.GetMinimapButtonAnchor)
+        if ok then
+            anchor = value
+        end
+    end
     return {
         host = self.host or "undecided",
         waited = self.hostWaited,
         registered = self.host == "pandaui",
         layout = self.hostLayout,
-        window = self.window ~= nil,
-        page = self.page ~= nil,
+        window = self:IsOpen(),
         opens = self.opens,
-        dragFailures = self.dragFailures,
-        minimapButton = self.minimapButton ~= nil,
-        minimapAnchor = self.minimapAnchor,
+        minimapButton = anchor ~= nil,
+        minimapAnchor = anchor,
         minimapButtonShown = Setting("minimapButton") ~= false,
     }
 end
 
--- Turns the minimap button on or off. `enabled` nil toggles. Does nothing on
--- the pandaUI host, where there is no button of ours to toggle.
+-- Turns the shared panda button on or off for every Panda addon. `enabled`
+-- nil toggles. Under pandaUI only the stored value changes: its own button is
+-- the one beside the minimap.
 function Settings:SetMinimapButtonEnabled(enabled)
     if enabled == nil then
         enabled = Setting("minimapButton") == false
     end
-    Store("minimapButton", enabled and true or false)
-    self:ApplyMinimapButton()
-    return enabled and true or false
+    enabled = enabled and true or false
+    Store("minimapButton", enabled)
+    local shared = self.host == "shared" and SharedHost()
+    if shared and type(shared.SetMinimapButtonShown) == "function" then
+        pcall(shared.SetMinimapButtonShown, enabled)
+    end
+    return enabled
 end
 
 -- Lifecycle -----------------------------------------------------------------
@@ -2302,24 +2045,26 @@ function Settings:OnInit()
 end
 
 function Settings:OnEnable()
+    -- Settled at once: without pandaUI the shared window and its panda
+    -- button come up straight away. The poll stays for a pandaUI whose files
+    -- run after this one; finding it hands the pages over to it.
+    self:ResolveHost(false)
     local driver = PQ:GetModule("Driver")
     if not driver then
-        -- No driver means no poll is possible at all, so decide now rather than
-        -- leaving /pq config with no host.
+        -- No driver means no poll is possible at all, so decide now.
         self:ResolveHost(true)
         return
     end
-    -- Do not make a standalone player wait fifteen seconds just because this
-    -- module also leaves room for pandaUI to finish loading. A later detected
-    -- pandaUI hides this provisional copy before it can share the anchor.
-    self:EnsureMinimapButton()
     driver:Schedule("settings.sliders", 0, function()
         Settings:RefreshLiveSliders()
     end)
+    if self.hostSettled then
+        return
+    end
     driver:Schedule("settings.host", HOST_POLL_INTERVAL, function(elapsed)
         Settings.hostWaited = Settings.hostWaited + (elapsed or HOST_POLL_INTERVAL)
-        local host = Settings:ResolveHost(Settings.hostWaited >= HOST_POLL_SECONDS)
-        if host then
+        Settings:ResolveHost(Settings.hostWaited >= HOST_POLL_SECONDS)
+        if Settings.hostSettled then
             local running = PQ:GetModule("Driver")
             if running then
                 running:Unschedule("settings.host")

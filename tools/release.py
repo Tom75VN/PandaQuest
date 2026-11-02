@@ -33,7 +33,7 @@ README = ROOT / "README.md"
 # Everything the client loads at runtime, plus the licence and player docs.
 RUNTIME_DIRS = (
     "Compatibility", "Core", "Data", "Database", "HUD", "Locales", "Map",
-    "Quest", "Tooltip", "World", "media",
+    "Quest", "Tooltip", "World", "media", "Libs",
 )
 RUNTIME_FILES = (
     ADDON + ".toc", ADDON + ".lua", "LICENSE", "README.md", "CHANGELOG.md",
@@ -243,7 +243,8 @@ def check_package(files):
         if name.lower() not in shipped:
             errors.append("required file missing from package: %s" % name)
     for name in files:
-        if name.startswith("media/") and not name.lower().endswith(MEDIA_EXTENSIONS):
+        if ((name.startswith("media/") or "/media/" in name.lower())
+                and not name.lower().endswith(MEDIA_EXTENSIONS)):
             errors.append("media file the client cannot use: %s" % name)
     listed = set(entry.lower() for entry in toc_entries())
     unlisted = [name for name in files
